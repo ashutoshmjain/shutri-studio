@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Shutri Studio",
+  "version": "0.1.0",
+  "identifier": "com.shutri.studio",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      { "title": "Shutri Studio — Research to Reels", "width": 1280, "height": 820, "minWidth": 960, "minHeight": 640 }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "category": "Productivity",
+    "shortDescription": "Research to Reels: narrative, clips and channels",
+    "externalBin": []
+  }
+}

@@ -1,0 +1,36 @@
+:root {
+  --ink: #1c1917;
+  --ink-2: #44403c;
+  --muted: #78716c;
+  --line: #e7e5e4;
+  --panel: #ffffff;
+  --wash: #f5f5f4;
+  --accent: #b45309;
+  --accent-ink: #92400e;
+  --good: #15803d;
+  --warn: #b45309;
+  --radius: 10px;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  color: var(--ink);
+  background: var(--wash);
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+h1, h2, h3 { font-family: Georgia, "Times New Roman", serif; font-weight: 600; letter-spacing: -0.01em; }
+button {
+  font: inherit; cursor: pointer; border: 1px solid var(--line);
+  background: var(--panel); color: var(--ink); border-radius: 8px; padding: 7px 14px;
+}
+button.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+button.accent { background: var(--accent); color: #fff; border-color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: default; }
+input, textarea, select {
+  font: inherit; color: var(--ink); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%;
+}
+textarea { min-height: 90px; resize: vertical; }
+label { display: block; font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 10px 0 4px; }
+.mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; word-break: break-all; }
+.small { font-size: 12px; color: var(--muted); }
+.error { color: #b91c1c; font-size: 13px; }
+.ok { color: var(--good); font-size: 13px; }

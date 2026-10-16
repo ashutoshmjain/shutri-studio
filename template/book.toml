@@ -1,0 +1,8 @@
+[book]
+title = "{name}"
+language = "en"
+src = "src"
+
+[preprocessor.katex]
+
+[output.html]
