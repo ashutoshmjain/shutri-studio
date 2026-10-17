@@ -55,7 +55,7 @@ fn git_status(path: String) -> git::GitStatus {
 
 #[tauri::command]
 fn git_publish(path: String, message: String) -> CmdResult<String> {
-    git::publish(&pb(&path), &message, &["src/", "book.toml"]).map_err(|e| e.to_string())
+    git::publish(&pb(&path), &message, &["src/", "episodes/", "book.toml"]).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -64,10 +64,7 @@ fn list_channels() -> Vec<channels::Channel> {
 }
 
 fn plan_path(project: &Path, episode: u32) -> PathBuf {
-    project
-        .join("src/ddma/docs/episodes")
-        .join(episode.to_string())
-        .join("plan.json")
+    shutri_core::bundle::episode_dir(project, episode).join("plan.json")
 }
 
 #[tauri::command]

@@ -18,8 +18,32 @@ record: `../ResearchToReels-Architecture.md`.
 |---|---|
 | `core/` | Rust core library (episodes, plan, git, nostr, media) — fully tested headlessly |
 | `src-tauri/` | Tauri 2 shell; thin typed commands over the core, no server, no ports |
-| `src/` | Svelte + TypeScript frontend (Article / Reels / Publish / Identity) |
+| `src/` | Svelte + TypeScript frontend (Guide / Article / Reels / Publish / Identity) |
 | `template/` | Bundled new-project scaffold |
+
+## Fresh project layout (what Create new makes)
+
+Studio always starts from a fresh repo — it never imports or syncs an
+existing publication. A new project is a self-contained mdBook ledger:
+
+```text
+MyResearch/
+  book.toml            (KaTeX preprocessor enabled)
+  README.md
+  src/
+    SUMMARY.md         cover · mempool · template · chain (managed block
+                       between <!-- studio:episodes --> markers; anything
+                       outside the markers is preserved verbatim)
+    cover.md  mempool.md  template.md  chain.md
+    _<slug>.md         mempool drafts (no permanent URL yet)
+    <N>.md             mined episodes (permanent URLs, Law of 21 per block)
+  episodes/
+    <N>/  audio/  transcription.json  narrative.md
+          plan.json  cover.webp  clips/  combined/
+  .studio/             local app state, git-ignored
+```
+
+The episode number is the master key across article, bundle and posts.
 
 ## Run
 

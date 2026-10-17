@@ -46,15 +46,54 @@ fn git_remote(path: &Path) -> Option<String> {
     }
 }
 
-/// Create a new project from the bundled template text.
+/// Create a fresh Studio project: a self-contained mdBook ledger with no
+/// legacy structure. Layout:
+/// `book.toml`, `src/{SUMMARY,cover,mempool,template,chain}.md`,
+/// `src/_<slug>.md` mempool drafts, `src/<N>.md` mined episodes,
+/// `episodes/<N>/` media bundles, `.studio/` local app state (git-ignored).
 pub fn create(path: &Path, name: &str, template: &Template) -> Result<ProjectInfo> {
     if path.join("src").exists() {
         return crate::msg("target already contains a src/ directory");
     }
     std::fs::create_dir_all(path.join("src"))?;
+    std::fs::create_dir_all(path.join("episodes"))?;
     std::fs::create_dir_all(path.join(".studio"))?;
     std::fs::write(path.join("book.toml"), template.book_toml.replace("{name}", name))?;
-    std::fs::write(path.join("src/SUMMARY.md"), "# Summary\n")?;
+    std::fs::write(path.join(".gitignore"), "book/\n.studio/\n")?;
+    std::fs::write(
+        path.join("README.md"),
+        format!(
+            "# {name}\n\nA Shutri Studio project: LLM research published as an mdBook, \
+             narrated audio, short clips and channel posts. Drafts live in the mempool \
+             (`src/_<slug>.md`); mined episodes are `src/<N>.md` with media in \
+             `episodes/<N>/`. Build the book with `mdbook build`.\n"
+        ),
+    )?;
+    std::fs::write(
+        path.join("src/cover.md"),
+        format!("# {name}\n\nResearch, published whole. Drafts wait in the mempool; \
+                 finished episodes are mined into the template and sealed into the chain, \
+                 21 episodes per block.\n"),
+    )?;
+    std::fs::write(
+        path.join("src/mempool.md"),
+        "# mempool\n\nUnmined research drafts (`_<slug>.md`). Publish research here \
+         as-is while the audio is still being made. Nothing in the mempool has a \
+         permanent URL yet.\n",
+    )?;
+    std::fs::write(
+        path.join("src/template.md"),
+        "# template\n\nMined, numbered episodes with permanent URLs. The block holds \
+         at most 21 episodes (the Law of 21); a full block is sealed into the chain.\n",
+    )?;
+    std::fs::write(
+        path.join("src/chain.md"),
+        "# chain\n\nSealed blocks of 21 episodes. Permanent and immutable.\n",
+    )?;
+    std::fs::write(
+        path.join("src/SUMMARY.md"),
+        "# Summary\n\n- [cover](cover.md)\n",
+    )?;
     std::fs::write(
         path.join("src/_welcome.md"),
         format!("# Welcome\n\nYour first mempool draft in {name}. Mine it to assign episode 1.\n"),
@@ -138,5 +177,26 @@ mod tests {
         let info = create(&p, "MyResearch", &Template::default()).unwrap();
         assert_eq!(info.mempool_count, 1);
         assert!(info.is_git_repo);
+        // Fresh-repo layout: no legacy (deepDive/ddma) structure anywhere.
+        for f in [
+            "book.toml",
+            "README.md",
+            ".gitignore",
+            "src/cover.md",
+            "src/mempool.md",
+            "src/template.md",
+            "src/chain.md",
+            "src/_welcome.md",
+        ] {
+            assert!(p.join(f).exists(), "missing {f}");
+        }
+        assert!(p.join("episodes").is_dir());
+        assert!(!p.join("src/ddma").exists());
+        let summary = std::fs::read_to_string(p.join("src/SUMMARY.md")).unwrap();
+        assert!(summary.contains("- [cover](cover.md)"), "{summary}");
+        assert!(summary.contains("- [mempool](mempool.md)"), "{summary}");
+        assert!(summary.contains("    - [Welcome](_welcome.md)"), "{summary}");
+        assert!(summary.contains("- [template](template.md)"), "{summary}");
+        assert!(summary.contains("- [chain](chain.md)"), "{summary}");
     }
 }

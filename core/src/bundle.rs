@@ -1,5 +1,6 @@
-//! Episode bundle: the repo contract the publisher watches (strategy §1).
-//! `src/ddma/docs/episodes/<N>/{plan.json, transcription.json, cover.webp, clips/<N>-<k>.mp4}`
+//! Episode bundle: everything for one numbered episode, at the project root.
+//! `episodes/<N>/{audio/, transcription.json, narrative.md, plan.json,
+//! cover.webp, clips/<N>-<k>.mp4, combined/}`
 //! The kitchen writes this; the publisher never writes back into it.
 
 use std::collections::BTreeMap;
@@ -12,7 +13,7 @@ use crate::plan::Plan;
 use crate::Result;
 
 pub fn episode_dir(project: &Path, episode: u32) -> PathBuf {
-    project.join("src/ddma/docs/episodes").join(episode.to_string())
+    project.join("episodes").join(episode.to_string())
 }
 pub fn clip_filename(episode: u32, clip: u32) -> String {
     format!("{episode}-{clip}.mp4")
@@ -173,7 +174,7 @@ mod tests {
     fn read_only_golden_247_contract() {
         // Read-only check against the live reference episode, when present.
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deepDive");
-        if !root.join("src/ddma/docs/episodes/247/plan.json").exists() { return; }
+        if !episode_dir(&root, 247).join("plan.json").exists() { return; }
         let r = validate_bundle(&root, 247, false).unwrap();
         assert_eq!(r.plan_clips, 24);
         assert!(r.present_clips.contains(&11));

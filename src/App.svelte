@@ -2,12 +2,42 @@
   import { onMount } from "svelte";
   import { api, inTauri, type Channel, type Clip, type Episode, type GitStatus, type ProjectInfo } from "./lib/api";
 
-  type View = "article" | "reels" | "publish" | "identity";
-  let view: View = "article";
+  type View = "guide" | "article" | "reels" | "publish" | "identity";
+  let view: View = "guide";
+
+  const MASTER_PROMPT = `Objective: Package the complete exhaustive research from this session into a self-extracting Python script without summarizing or pruning.
+
+1. Packaging Requirements:
+* Full Fidelity: Package the exhaustive research in its entirety. Do not summarize or prune.
+* Absolute KaTeX: Wrap all mathematical notation and symbols in Absolute KaTeX delimiters: $...$ for inline and $$...$$ for block displays. Never leave whitespace adjacent to '$'. Escape financial dollar amounts as \\$ (e.g. \\$100M).
+* Hyperlinked Bibliography: Format every entry in the "Works Cited" section as a clickable Markdown link: [^N]: [Author, Title, Year](URL).
+* Title Header: Ensure the document begins with a strict H1 title adhering to a 5-word maximum limit: # [Title].
+
+2. Python Script Format:
+Create an executable Python script where the full exhaustive research markdown is stored in raw_markdown:
+
+raw_markdown = """
+# [Title]
+
+[Insert complete exhaustive markdown research here with $inline$ and $$block$$ math and [^1] citations...]
+"""
+
+if __name__ == '__main__':
+    with open('final_research.md', 'w', encoding='utf-8') as f:
+        f.write(raw_markdown)
+    print("Extracted final_research.md successfully.")`;
+
+  async function copyPrompt() {
+    try {
+      await navigator.clipboard.writeText(MASTER_PROMPT);
+      notice = "Master Packaging Prompt copied. Paste it into Gemini, Claude or ChatGPT at the end of your research session.";
+    } catch {
+      error = "Clipboard unavailable in this window; select the prompt text and copy it manually.";
+    }
+  }
 
   let projectPath = "";
   let projectName = "MyResearch";
-  let cloneUrl = "";
   let project: ProjectInfo | null = null;
   let episodes: Episode[] = [];
   let channels: Channel[] = [];
@@ -54,11 +84,7 @@
   }
   async function createProject() {
     const p = await run(() => api.createProject(projectPath, projectName));
-    if (p) { project = p; notice = "Project created and initialised as a Git repo."; await refresh(); }
-  }
-  async function cloneProject() {
-    const p = await run(() => api.cloneProject(cloneUrl, projectPath));
-    if (p) { project = p; await refresh(); }
+    if (p) { project = p; notice = "Fresh project created: book.toml, src/SUMMARY.md (cover · mempool · template · chain), a _welcome mempool draft and an episodes/ folder — initialised as a Git repo."; await refresh(); }
   }
   async function createDraft() {
     const ep = await run(() => api.createDraft(projectPath, slug, title, body));
@@ -118,6 +144,7 @@
     <div class="tagline">Research to Reels</div>
   </div>
   <nav>
+    <button class:active={view === "guide"} onclick={() => (view = "guide")}>Guide</button>
     <button class:active={view === "article"} onclick={() => (view = "article")}>Article</button>
     <button class:active={view === "reels"} onclick={() => (view = "reels")}>Reels</button>
     <button class:active={view === "publish"} onclick={() => (view = "publish")}>Publish</button>
@@ -132,22 +159,64 @@
 <main>
   <section class="project-bar">
     <div class="grow">
-      <label for="pp">Project folder (your own repo — never deepDive by default)</label>
-      <input id="pp" bind:value={projectPath} placeholder="C:\\Users\\you\\MyResearch" />
+      <label for="pp">New project folder (a fresh repo — Studio sets up the whole structure)</label>
+      <input id="pp" bind:value={projectPath} placeholder="C:\Users\you\MyResearch" />
     </div>
-    <button class="primary" disabled={busy || !projectPath} onclick={openProject}>Open</button>
-    <button disabled={busy || !projectPath} onclick={createProject}>Create new</button>
-    <div class="grow">
-      <label for="cu">…or clone your repo</label>
-      <input id="cu" bind:value={cloneUrl} placeholder="git@github.com:you/research.git" />
+    <div>
+      <label for="pn">Project name</label>
+      <input id="pn" bind:value={projectName} placeholder="MyResearch" />
     </div>
-    <button disabled={busy || !projectPath || !cloneUrl} onclick={cloneProject}>Clone</button>
+    <button class="primary" disabled={busy || !projectPath} onclick={createProject}>Create new project</button>
+    <button disabled={busy || !projectPath} onclick={openProject}>Reopen existing</button>
   </section>
+  <p class="small">Studio always starts from a fresh repo: <span class="mono">book.toml</span>, <span class="mono">src/SUMMARY.md</span> with cover · mempool · template · chain, and an <span class="mono">episodes/</span> folder for audio, plans and clips. It does not import or sync an existing publication.</p>
   {#if project}
     <p class="small mono">{project.path} · episodes {project.episode_count} · mempool {project.mempool_count} · {project.is_git_repo ? `git: ${project.remote ?? "no remote"}` : "not a git repo"}</p>
   {/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if notice}<p class="ok" role="status">{notice}</p>{/if}
+
+  {#if view === "guide"}
+    <div class="grid">
+      <section class="panel">
+        <h2>What we are doing</h2>
+        <p>Shutri Studio turns one LLM research session into a permanent, citable publication and everything that flows from it: an mdBook article with intact mathematics, a narrated podcast episode, a readable Narrative for LinkedIn and Nostr, and short infographic clips for reels and Shorts.</p>
+        <p>The goal is permanence with signal. LLM research normally dies in a chat window; here every finished piece is mined into a numbered episode in your own Git repo, with a permanent URL, and the episode number keys the article, the audio, the clips and every post.</p>
+        <h3>The pipeline</h3>
+        <ol class="stages">
+          <li><strong>Research</strong> in Gemini or similar — iterate freely; this is creative work.</li>
+          <li><strong>Package</strong> the session with the Master Packaging Prompt (right) into a self-extracting Python script.</li>
+          <li><strong>Publish as-is</strong> into the mempool (<span class="mono">_slug.md</span>) and build the book. No permanent URL yet.</li>
+          <li><strong>Audio</strong> in NotebookLM, then your manual Audacity edit for the podcast. Studio receives the original NotebookLM audio.</li>
+          <li><strong>Mine &amp; lock</strong> when the audio is final: the draft becomes a numbered episode — the permanent URL the Spotify description will link to.</li>
+          <li><strong>Transcribe</strong> the audio word-by-word; the transcript becomes the Narrative, the readable version for LinkedIn, Nostr and later Substack.</li>
+          <li><strong>Clip</strong> the Narrative: edit speech and music segments, crossfades and volumes, intro page and outro questions, then infographics via Mosaic.</li>
+          <li><strong>Distribute</strong> finished clips from GitHub, and combine them into the long-form YouTube video (and a combined audio to listen back and check).</li>
+        </ol>
+        <p class="small">Three steps stay manual and creative by design: the research, the NotebookLM/Audacity audio, and the clip edit. Studio automates everything around them.</p>
+      </section>
+      <section class="panel">
+        <h2>Why equations break — and the Python fix</h2>
+        <p>Publishing LLM research on the web fails in predictable ways. Copy-pasted Markdown mangles <span class="mono">$...$</span> delimiters, chat exports drop or summarize content, platforms strip math entirely, and a single space next to a <span class="mono">$</span> silently breaks KaTeX. Base64 survives transport but is opaque — you cannot read, diff or fix it. A month of trying those routes leads to one reliable answer: <strong>LLMs are excellent at emitting a Python script</strong>. Ask for the whole session inside a <span class="mono">raw_markdown</span> string in a self-extracting <span class="mono">.py</span> file, run it, and the research lands on disk byte-for-byte, math included.</p>
+        <div class="row">
+          <button class="primary" onclick={copyPrompt}>Copy the Master Packaging Prompt</button>
+        </div>
+        <pre class="mono event prompt">{MASTER_PROMPT}</pre>
+        <h3>Your fresh repo</h3>
+        <pre class="mono event">MyResearch/
+  book.toml
+  README.md
+  src/
+    SUMMARY.md   cover · mempool · template · chain
+    cover.md  mempool.md  template.md  chain.md
+    _draft.md    mempool drafts
+    1.md         mined episodes (permanent URLs)
+  episodes/
+    1/  audio/  transcription.json  narrative.md
+        plan.json  cover.webp  clips/  combined/</pre>
+      </section>
+    </div>
+  {/if}
 
   {#if view === "article"}
     <div class="grid">
@@ -303,4 +372,8 @@
   .badge[data-s="live"] { background: #dcfce7; color: var(--good); }
   .backup { background: #fef3c7; padding: 10px; border-radius: 8px; }
   .event { white-space: pre-wrap; background: var(--wash); padding: 10px; border-radius: 8px; max-height: 240px; overflow: auto; }
+  .prompt { max-height: 300px; text-align: left; }
+  .stages { padding-left: 20px; }
+  .stages li { margin: 7px 0; line-height: 1.45; }
+  .panel h3 { margin: 16px 0 6px; font-size: 16px; }
 </style>

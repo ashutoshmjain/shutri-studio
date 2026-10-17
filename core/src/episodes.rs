@@ -71,7 +71,7 @@ pub fn list_episodes(project: &Path) -> Result<Vec<Episode>> {
                 slug: stem.clone(),
                 title: title_of(&text, &stem),
                 has_clips: project
-                    .join("src/ddma/docs/episodes")
+                    .join("episodes")
                     .join(&stem)
                     .join("plan.json")
                     .exists(),
@@ -141,30 +141,46 @@ pub fn promote(project: &Path, slug: &str) -> Result<Episode> {
         .ok_or_else(|| CoreError::Msg("episode vanished after promote".into()))
 }
 
-/// Regenerate the mempool/template sections of SUMMARY.md from disk.
-/// Deliberately simple and deterministic; hand-curated sections are kept.
+/// Regenerate the managed ledger block of SUMMARY.md from disk.
+/// Everything outside `<!-- studio:episodes -->` … `<!-- /studio:episodes -->`
+/// (cover link, hand-written notes, sealed chain blocks) is preserved verbatim.
 pub fn sync_summary(project: &Path) -> Result<()> {
     let eps = list_episodes(project)?;
     let path = project.join("src/SUMMARY.md");
-    let existing = std::fs::read_to_string(&path).unwrap_or_else(|_| "# Summary\n".into());
-    // Keep everything before our managed block, regenerate the block.
-    let head = existing
-        .split("<!-- studio:episodes -->")
-        .next()
-        .unwrap_or("")
-        .trim_end()
-        .to_string();
+    let existing = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| "# Summary\n\n- [cover](cover.md)\n".into());
+    let (head, tail) = match existing.split_once("<!-- studio:episodes -->") {
+        Some((h, rest)) => {
+            let t = rest
+                .split_once("<!-- /studio:episodes -->")
+                .map(|(_, after)| after.trim_start_matches('\n').to_string())
+                .unwrap_or_default();
+            (h.trim_end().to_string(), t)
+        }
+        None => (existing.trim_end().to_string(), String::new()),
+    };
     let mut block = String::from("<!-- studio:episodes -->\n");
-    block.push_str("\n# The Mempool (Unconfirmed)\n");
+    block.push_str("- [mempool](mempool.md)\n");
     for e in eps.iter().filter(|e| e.number.is_none()) {
-        block.push_str(&format!("- [{}](_{}.md)\n", e.title, e.slug));
+        block.push_str(&format!("    - [{}](_{}.md)\n", e.title, e.slug));
     }
-    block.push_str("\n# Recent\n");
+    block.push_str("- [template](template.md)\n");
     for e in eps.iter().filter(|e| e.number.is_some()) {
-        block.push_str(&format!("- [{} : {}]({}.md)\n", e.number.unwrap(), e.title, e.number.unwrap()));
+        block.push_str(&format!(
+            "    - [{} : {}]({}.md)\n",
+            e.number.unwrap(),
+            e.title,
+            e.number.unwrap()
+        ));
     }
-    block.push_str("\n<!-- /studio:episodes -->\n");
-    std::fs::write(&path, format!("{head}\n\n{block}"))?;
+    block.push_str("- [chain](chain.md)\n");
+    block.push_str("<!-- /studio:episodes -->\n");
+    let mut out = format!("{head}\n\n{block}");
+    if !tail.is_empty() {
+        out.push('\n');
+        out.push_str(&tail);
+    }
+    std::fs::write(&path, out)?;
     Ok(())
 }
 
@@ -189,6 +205,23 @@ mod tests {
         assert_eq!(ep.number, Some(1));
         assert!(d.path().join("src/1.md").exists());
         let summary = std::fs::read_to_string(d.path().join("src/SUMMARY.md")).unwrap();
-        assert!(summary.contains("1.md"));
+        assert!(summary.contains("    - [1 : Quantum Memory](1.md)"), "{summary}");
+        assert!(summary.contains("- [template](template.md)"), "{summary}");
+        assert!(!summary.contains("_quantum-memory.md"), "{summary}");
+    }
+
+    #[test]
+    fn sync_summary_preserves_handwritten_tail() {
+        let d = proj();
+        std::fs::write(
+            d.path().join("src/SUMMARY.md"),
+            "# Summary\n\n- [cover](cover.md)\n\n<!-- studio:episodes -->\n- [stale](stale.md)\n<!-- /studio:episodes -->\n\n- [block 1](block1.md)\n",
+        )
+        .unwrap();
+        create_draft(d.path(), "fresh-draft", "Fresh Draft", "body").unwrap();
+        let summary = std::fs::read_to_string(d.path().join("src/SUMMARY.md")).unwrap();
+        assert!(summary.contains("- [block 1](block1.md)"), "{summary}");
+        assert!(summary.contains("    - [Fresh Draft](_fresh-draft.md)"), "{summary}");
+        assert!(!summary.contains("stale.md"), "{summary}");
     }
 }
