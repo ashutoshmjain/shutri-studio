@@ -7,6 +7,7 @@ pub mod bundle;
 pub mod channels;
 pub mod episodes;
 pub mod git;
+pub mod ingest;
 pub mod jobs;
 pub mod media;
 pub mod narrative;

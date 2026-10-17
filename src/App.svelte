@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, inTauri, pickFolder, type Channel, type Clip, type Episode, type GitStatus, type ProjectInfo } from "./lib/api";
+  import { api, inTauri, pickFolder, pickPayloadFile, type Channel, type Clip, type Episode, type GitStatus, type ProjectInfo } from "./lib/api";
 
   type View = "guide" | "article" | "reels" | "publish" | "identity";
   let view: View = "guide";
@@ -61,64 +61,98 @@ if __name__ == '__main__':
   let backupNsec = "";
   let signedEvent = "";
 
-  async function run<T>(fn: () => Promise<T>): Promise<T | null> {
-    busy = true; error = ""; notice = "";
+  let activity = "";
+  async function run<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
+    busy = true; activity = label; error = ""; notice = "";
     try { return await fn(); }
-    catch (e) { error = e instanceof Error ? e.message : String(e); return null; }
-    finally { busy = false; }
+    catch (e) { error = `${label} failed: ${e instanceof Error ? e.message : String(e)}`; return null; }
+    finally { busy = false; activity = ""; }
   }
 
   async function refresh() {
     if (!projectPath) return;
-    const eps = await run(() => api.listEpisodes(projectPath));
+    const eps = await run("Loading episodes", () => api.listEpisodes(projectPath));
     if (eps) episodes = eps;
-    const g = await run(() => api.gitStatus(projectPath));
+    const g = await run("Loading Git status", () => api.gitStatus(projectPath));
     if (g) git = g;
-    const id = await run(() => api.loadIdentity(projectPath));
+    const id = await run("Loading identity", () => api.loadIdentity(projectPath));
     identity = id ?? null;
   }
 
   async function browseFolder() {
-    const picked = await pickFolder().catch(() => null);
-    if (picked) {
-      projectPath = picked;
-      const base = picked.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
-      if (base && (projectName === "MyResearch" || !projectName)) projectName = base;
-      error = "";
-    } else if (!inTauri) {
-      notice = "Folder picker needs the desktop app; in this browser demo, type the path instead.";
+    error = ""; notice = "";
+    try {
+      const picked = await pickFolder();
+      if (picked) {
+        projectPath = picked;
+        const base = picked.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+        if (base && (projectName === "MyResearch" || !projectName)) projectName = base;
+        notice = `Folder chosen: ${picked}. Now click "Create new project" (or "Reopen existing" if it is already a Studio project).`;
+      } else if (!inTauri) {
+        notice = "Folder picker needs the desktop app; in this browser demo, type the path instead.";
+      } else {
+        notice = "Folder selection cancelled — no folder was chosen.";
+      }
+    } catch (e) {
+      error = `Folder picker failed: ${e instanceof Error ? e.message : String(e)}. You can still type the folder path manually.`;
+    }
+  }
+  let payloadPath = "";
+  async function browsePayload() {
+    error = ""; notice = "";
+    try {
+      const picked = await pickPayloadFile();
+      if (picked) {
+        payloadPath = picked;
+        notice = `Payload chosen: ${picked}. Now click "Extract into mempool".`;
+      } else if (!inTauri) {
+        notice = "File picker needs the desktop app; in this browser demo the extract step is simulated.";
+      } else {
+        notice = "Payload selection cancelled — no file was chosen.";
+      }
+    } catch (e) {
+      error = `Payload picker failed: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+  async function ingestPayload() {
+    const ep = await run("Extracting Python payload into the mempool", () => api.ingestPython(projectPath, payloadPath));
+    if (ep) {
+      payloadPath = "";
+      view = "article";
+      await refresh();
+      notice = `In mempool: "${ep.title}" as _${ep.slug}.md — KaTeX preserved. Find it in the Ledger; Mine & lock it when the audio is final.`;
     }
   }
   async function openProject() {
-    const p = await run(() => api.inspectProject(projectPath));
+    const p = await run("Opening project", () => api.inspectProject(projectPath));
     if (p) { project = p; await refresh(); }
   }
   async function createProject() {
-    const p = await run(() => api.createProject(projectPath, projectName));
-    if (p) { project = p; notice = "Fresh project created: book.toml, src/SUMMARY.md (cover · mempool · template · chain), a _welcome mempool draft and an episodes/ folder — initialised as a Git repo."; await refresh(); }
+    const p = await run("Creating fresh project (folders, SUMMARY.md, git init)", () => api.createProject(projectPath, projectName));
+    if (p) { project = p; await refresh(); notice = "Fresh project created: book.toml, src/SUMMARY.md (cover · mempool · template · chain), a _welcome mempool draft and an episodes/ folder — initialised as a Git repo. Next: Article tab, extract your Python payload."; }
   }
   async function createDraft() {
-    const ep = await run(() => api.createDraft(projectPath, slug, title, body));
-    if (ep) { notice = `Draft _${ep.slug}.md is in the mempool.`; slug = ""; title = ""; body = ""; await refresh(); }
+    const ep = await run("Adding draft to mempool", () => api.createDraft(projectPath, slug, title, body));
+    if (ep) { slug = ""; title = ""; body = ""; await refresh(); notice = `Draft _${ep.slug}.md is in the mempool — see the Ledger.`; }
   }
   async function promote(ep: Episode) {
-    const mined = await run(() => api.promoteEpisode(projectPath, ep.slug));
-    if (mined) { notice = `Mined as episode ${mined.number}.`; await refresh(); }
+    const mined = await run("Mining episode & locking number", () => api.promoteEpisode(projectPath, ep.slug));
+    if (mined) { await refresh(); notice = `Mined as episode ${mined.number} — permanent URL assigned. Never renumbered.`; }
   }
   async function build() {
-    const log = await run(() => api.buildBook(projectPath));
+    const log = await run("Building mdBook (this can take a moment)", () => api.buildBook(projectPath));
     if (log !== null) notice = "mdBook build finished. Preview is the book/ output.";
   }
   async function makePlan() {
-    const p = await run(() => api.planFromTranscript(transcript, targetSecs));
+    const p = await run("Breaking transcript into clips", () => api.planFromTranscript(transcript, targetSecs));
     if (p) plan = p;
   }
   async function savePlan() {
-    const out = await run(() => api.savePlan(projectPath, planEpisode, plan));
+    const out = await run("Saving plan.json", () => api.savePlan(projectPath, planEpisode, plan));
     if (out) notice = `Plan saved to ${out}`;
   }
   async function loadPlan() {
-    const p = await run(() => api.loadPlan(projectPath, planEpisode));
+    const p = await run("Loading saved plan", () => api.loadPlan(projectPath, planEpisode));
     if (p) plan = p;
   }
   function addMusic(clip: Clip) {
@@ -127,22 +161,24 @@ if __name__ == '__main__':
       ...clip.segments,
     ];
     plan = [...plan];
+    notice = `Music segment added to clip ${clip.num}. Adjust it in plan.json order; Save plan.json to persist.`;
   }
   function removeSegment(clip: Clip, i: number) {
     clip.segments = clip.segments.filter((_, j) => j !== i);
     plan = [...plan];
+    notice = `Segment removed from clip ${clip.num}. Save plan.json to persist.`;
   }
   async function publish() {
     const msg = `publish: episode ${planEpisode} via Shutri Studio`;
-    const out = await run(() => api.gitPublish(projectPath, msg));
-    if (out) { notice = out; await refresh(); }
+    const out = await run("Staging, committing & pushing", () => api.gitPublish(projectPath, msg));
+    if (out) { await refresh(); notice = out; }
   }
   async function makeIdentity() {
-    const id = await run(() => api.generateIdentity(projectPath, password));
+    const id = await run("Creating Nostr identity", () => api.generateIdentity(projectPath, password));
     if (id) { identity = { npub: id.npub, pubkey_hex: id.pubkey_hex }; backupNsec = id.nsec_backup; }
   }
   async function sign() {
-    const ev = await run(() => api.signNarrative(projectPath, password, planEpisode, `# Episode ${planEpisode}\n\n${transcript}`));
+    const ev = await run("Signing narrative", () => api.signNarrative(projectPath, password, planEpisode, `# Episode ${planEpisode}\n\n${transcript}`));
     if (ev) signedEvent = JSON.stringify(ev, null, 2);
   }
 
@@ -168,6 +204,7 @@ if __name__ == '__main__':
 {/if}
 
 <main>
+  {#if view === "guide"}
   <section class="project-bar">
     <div class="grow">
       <label for="pp">New project folder (a fresh repo — Studio sets up the whole structure)</label>
@@ -181,15 +218,35 @@ if __name__ == '__main__':
       <label for="pn">Project name</label>
       <input id="pn" bind:value={projectName} placeholder="MyResearch" />
     </div>
-    <button class="primary" disabled={busy || !projectPath} onclick={createProject}>Create new project</button>
-    <button disabled={busy || !projectPath} onclick={openProject}>Reopen existing</button>
+    <button class="primary" disabled={busy || !projectPath} title={!projectPath ? "Choose a folder first (Browse… or type a path)" : "Create the fresh project in this folder"} onclick={createProject}>Create new project</button>
+    <button disabled={busy || !projectPath} title={!projectPath ? "Choose a folder first (Browse… or type a path)" : "Open this folder as an existing Studio project"} onclick={openProject}>Reopen existing</button>
   </section>
-  <p class="small">Studio always starts from a fresh repo: <span class="mono">book.toml</span>, <span class="mono">src/SUMMARY.md</span> with cover · mempool · template · chain, and an <span class="mono">episodes/</span> folder for audio, plans and clips. It does not import or sync an existing publication.</p>
-  {#if project}
-    <p class="small mono">{project.path} · episodes {project.episode_count} · mempool {project.mempool_count} · {project.is_git_repo ? `git: ${project.remote ?? "no remote"}` : "not a git repo"}</p>
+  <p class="small">Studio always starts from a fresh repo: <span class="mono">book.toml</span>, <span class="mono">src/SUMMARY.md</span> with cover · mempool · template · chain, and an <span class="mono">episodes/</span> folder for audio, plans and clips. It does not import or sync an existing publication. {#if !projectPath}First step: choose a folder above — both buttons stay disabled until you do.{/if}</p>
+  {:else}
+  <section class="project-strip">
+    {#if project}
+      <span class="mono">{project.path}</span>
+      <span class="small">episodes {project.episode_count} · mempool {project.mempool_count} · {project.is_git_repo ? `git: ${project.remote ?? "no remote"}` : "not a git repo"}</span>
+    {:else}
+      <span class="small">No project open yet — Article, Reels and Publish need one.</span>
+    {/if}
+    <button disabled={busy} onclick={() => (view = "guide")}>{project ? "Switch project" : "Create or open a project"}</button>
+  </section>
   {/if}
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#if notice}<p class="ok" role="status">{notice}</p>{/if}
+
+  <div class="statusbar" role="status" aria-live="polite">
+    {#if busy}
+      <span class="spinner" aria-hidden="true"></span><span>{activity}… please wait.</span>
+    {:else if error}
+      <span class="error">{error}</span>
+    {:else if notice}
+      <span class="ok">{notice}</span>
+    {:else if !project}
+      <span class="small">Ready. Start in the Guide: choose a folder, create a fresh project, then bring your research in from the Article tab.</span>
+    {:else}
+      <span class="small">Ready — project open. Article brings research in, Reels makes clips, Publish ships them.</span>
+    {/if}
+  </div>
 
   {#if view === "guide"}
     <div class="grid">
@@ -245,6 +302,20 @@ if __name__ == '__main__':
   {#if view === "article"}
     <div class="grid">
       <section class="panel">
+        <h2>Bring research in — Python payload</h2>
+        <p class="small">Finish your LLM session with the Master Packaging Prompt (Guide tab), save the <span class="mono">.py</span> it gives you, then extract it here. The research lands in the mempool exactly as written — KaTeX intact. This is the normal way research enters Studio.</p>
+        <div class="pathrow">
+          <input bind:value={payloadPath} placeholder="C:\Users\you\Downloads\research_payload.py" aria-label="Python payload file" />
+          <button disabled={busy} onclick={browsePayload}>Browse .py…</button>
+        </div>
+        <div class="row">
+          <button class="primary" disabled={busy || !projectPath || !payloadPath} title={!projectPath ? "Open a project first (Guide tab)" : !payloadPath ? "Choose a .py payload first" : "Extract raw_markdown into the mempool"} onclick={ingestPayload}>Extract into mempool</button>
+        </div>
+        {#if !projectPath}<p class="small">Needs an open project — create one in the Guide tab first.</p>
+        {:else if !payloadPath}<p class="small">Choose the <span class="mono">.py</span> payload to enable extraction.</p>{/if}
+      </section>
+
+      <section class="panel">
         <h2>Ledger</h2>
         {#if episodes.length === 0}<p class="small">Open or create a project to see its mempool and mined episodes.</p>{/if}
         {#each episodes as ep}
@@ -262,7 +333,7 @@ if __name__ == '__main__':
       </section>
 
       <section class="panel">
-        <h2>New mempool draft</h2>
+        <h2>…or write a draft by hand</h2>
         <label for="slug">Slug</label>
         <input id="slug" bind:value={slug} placeholder="quantum-memory" />
         <label for="ttl">Title</label>
@@ -397,6 +468,11 @@ if __name__ == '__main__':
   .backup { background: #fef3c7; padding: 10px; border-radius: 8px; }
   .event { white-space: pre-wrap; background: var(--wash); padding: 10px; border-radius: 8px; max-height: 240px; overflow: auto; }
   .prompt { max-height: 300px; text-align: left; }
+  .statusbar { display: flex; align-items: center; gap: 9px; margin-top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 14px; font-size: 13px; min-height: 38px; }
+  .spinner { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+  .project-strip { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 14px; }
   .pathrow { display: flex; gap: 8px; }
   .pathrow input { flex: 1; }
   .pathrow button { white-space: nowrap; }

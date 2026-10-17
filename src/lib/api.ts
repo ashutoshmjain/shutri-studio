@@ -71,6 +71,19 @@ export async function pickFolder(): Promise<string | null> {
   return typeof picked === "string" ? picked : null;
 }
 
+/** Native picker for the LLM packaging payload (.py). */
+export async function pickPayloadFile(): Promise<string | null> {
+  if (!inTauri) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({
+    directory: false,
+    multiple: false,
+    title: "Choose your research payload (.py from the LLM)",
+    filters: [{ name: "Python payload", extensions: ["py"] }],
+  });
+  return typeof picked === "string" ? picked : null;
+}
+
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (inTauri) return invoke<T>(cmd, args);
   return demo(cmd, args ?? {}) as Promise<T>;
@@ -127,6 +140,11 @@ async function demo(cmd: string, a: Record<string, unknown>): Promise<unknown> {
       return { path: String(a.dest ?? "demo"), is_git_repo: true, remote: String(a.url ?? ""), episode_count: 0, mempool_count: 0 };
     case "list_episodes":
       return demoEpisodes;
+    case "ingest_python": {
+      const ep: Episode = { number: null, slug: "ingested-research", title: "Ingested Research (demo)", path: "demo/src/_ingested-research.md", stage: "mempool", has_clips: false };
+      demoEpisodes = [...demoEpisodes, ep];
+      return ep;
+    }
     case "create_draft": {
       const ep: Episode = { number: null, slug: String(a.slug), title: String(a.title), path: `demo/src/_${a.slug}.md`, stage: "mempool", has_clips: false };
       demoEpisodes = [...demoEpisodes, ep];
@@ -185,6 +203,8 @@ export const api = {
   listEpisodes: (path: string) => call<Episode[]>("list_episodes", { path }),
   createDraft: (path: string, slug: string, title: string, body: string) =>
     call<Episode>("create_draft", { path, slug, title, body }),
+  ingestPython: (path: string, source: string) =>
+    call<Episode>("ingest_python", { path, source }),
   promoteEpisode: (path: string, slug: string) => call<Episode>("promote_episode", { path, slug }),
   buildBook: (path: string) => call<string>("build_book", { path }),
   gitStatus: (path: string) => call<GitStatus>("git_status", { path }),

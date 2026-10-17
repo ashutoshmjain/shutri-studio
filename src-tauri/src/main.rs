@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use shutri_core::{bundle, channels, episodes, git, jobs::Jobs, nostr, plan, project};
+use shutri_core::{bundle, channels, episodes, git, ingest, jobs::Jobs, nostr, plan, project};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -36,6 +36,11 @@ fn list_episodes(path: String) -> CmdResult<Vec<episodes::Episode>> {
 #[tauri::command]
 fn create_draft(path: String, slug: String, title: String, body: String) -> CmdResult<episodes::Episode> {
     episodes::create_draft(&pb(&path), &slug, &title, &body).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ingest_python(path: String, source: String) -> CmdResult<episodes::Episode> {
+    ingest::ingest_python_script(&pb(&path), &pb(&source)).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -198,6 +203,7 @@ fn main() {
             clone_project,
             list_episodes,
             create_draft,
+            ingest_python,
             promote_episode,
             build_book,
             git_status,
