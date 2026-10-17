@@ -62,6 +62,15 @@ export interface GitStatus {
 export const inTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+/** Native folder picker (Windows dialog, new-folder button included).
+ * Returns null when cancelled or in browser demo mode (type the path). */
+export async function pickFolder(): Promise<string | null> {
+  if (!inTauri) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({ directory: true, multiple: false, title: "Choose or create your project folder" });
+  return typeof picked === "string" ? picked : null;
+}
+
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (inTauri) return invoke<T>(cmd, args);
   return demo(cmd, args ?? {}) as Promise<T>;

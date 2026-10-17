@@ -190,6 +190,7 @@ fn list_jobs(state: tauri::State<'_, Jobs>) -> Vec<shutri_core::jobs::Job> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(Jobs::new())
         .invoke_handler(tauri::generate_handler![
             inspect_project,

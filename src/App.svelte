@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, inTauri, type Channel, type Clip, type Episode, type GitStatus, type ProjectInfo } from "./lib/api";
+  import { api, inTauri, pickFolder, type Channel, type Clip, type Episode, type GitStatus, type ProjectInfo } from "./lib/api";
 
   type View = "guide" | "article" | "reels" | "publish" | "identity";
   let view: View = "guide";
@@ -78,6 +78,17 @@ if __name__ == '__main__':
     identity = id ?? null;
   }
 
+  async function browseFolder() {
+    const picked = await pickFolder().catch(() => null);
+    if (picked) {
+      projectPath = picked;
+      const base = picked.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+      if (base && (projectName === "MyResearch" || !projectName)) projectName = base;
+      error = "";
+    } else if (!inTauri) {
+      notice = "Folder picker needs the desktop app; in this browser demo, type the path instead.";
+    }
+  }
   async function openProject() {
     const p = await run(() => api.inspectProject(projectPath));
     if (p) { project = p; await refresh(); }
@@ -160,7 +171,11 @@ if __name__ == '__main__':
   <section class="project-bar">
     <div class="grow">
       <label for="pp">New project folder (a fresh repo — Studio sets up the whole structure)</label>
-      <input id="pp" bind:value={projectPath} placeholder="C:\Users\you\MyResearch" />
+      <div class="pathrow">
+        <input id="pp" bind:value={projectPath} placeholder="C:\Users\you\MyResearch" />
+        <button disabled={busy} onclick={browseFolder}>Browse…</button>
+      </div>
+      <p class="small">Browse opens the Windows folder dialog — pick a folder, or create a new one inside it. The project is created in the folder you choose.</p>
     </div>
     <div>
       <label for="pn">Project name</label>
@@ -179,9 +194,18 @@ if __name__ == '__main__':
   {#if view === "guide"}
     <div class="grid">
       <section class="panel">
+        <h2>The problem</h2>
+        <p>Research is getting lost inside LLMs. A Gemini session can hand you a web page link, or you can file the work into a knowledge graph, but it stays locked inside one tool's silo — rarely citable, rarely readable by anyone else, and gone when the session is.</p>
+        <p>At the same time, research itself has arguably become the easy part. The hard part has moved: <strong>getting attention for your ideas</strong>. Publishing work into mass media is still genuinely difficult, and every platform mangles a different thing.</p>
         <h2>What we are doing</h2>
-        <p>Shutri Studio turns one LLM research session into a permanent, citable publication and everything that flows from it: an mdBook article with intact mathematics, a narrated podcast episode, a readable Narrative for LinkedIn and Nostr, and short infographic clips for reels and Shorts.</p>
-        <p>The goal is permanence with signal. LLM research normally dies in a chat window; here every finished piece is mined into a numbered episode in your own Git repo, with a permanent URL, and the episode number keys the article, the audio, the clips and every post.</p>
+        <p>Shutri Studio is a deliberately opinionated, workflow-shaped app — Research to Reels. It takes one research session and walks it to people: a permanent article, a podcast episode, readable narratives, and short clips, fixing each platform's format quirks along the way instead of fighting them by hand every time.</p>
+        <h3>Format quirks this app handles for you</h3>
+        <ul class="stages">
+          <li><strong>Research needs real mathematics.</strong> Equations and symbols are the content, not decoration — so the research is published on the <strong>open web</strong> (your own mdBook site, full KaTeX), not on Substack or LinkedIn, which strip or break math.</li>
+          <li><strong>Each platform gets the version it deserves.</strong> The exhaustive paper lives on the web; the watered-down Narrative goes to LinkedIn, Nostr and later Substack; the podcast RSS carries the audio to Spotify, Apple and Fountain.</li>
+          <li><strong>Shorts have hard limits.</strong> A clip must run under 3 minutes to qualify as a YouTube Short — clip planning targets that, in a square 740×740 frame with music ducked under speech, captions and titles placed where each platform's interface does not cover them.</li>
+          <li><strong>Permanence needs a stable link.</strong> Spotify's description can only point at a numbered episode, so mining happens exactly when the audio is final — never before, never renumbered after.</li>
+        </ul>
         <h3>The pipeline</h3>
         <ol class="stages">
           <li><strong>Research</strong> in Gemini or similar — iterate freely; this is creative work.</li>
@@ -373,6 +397,9 @@ if __name__ == '__main__':
   .backup { background: #fef3c7; padding: 10px; border-radius: 8px; }
   .event { white-space: pre-wrap; background: var(--wash); padding: 10px; border-radius: 8px; max-height: 240px; overflow: auto; }
   .prompt { max-height: 300px; text-align: left; }
+  .pathrow { display: flex; gap: 8px; }
+  .pathrow input { flex: 1; }
+  .pathrow button { white-space: nowrap; }
   .stages { padding-left: 20px; }
   .stages li { margin: 7px 0; line-height: 1.45; }
   .panel h3 { margin: 16px 0 6px; font-size: 16px; }
