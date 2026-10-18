@@ -92,7 +92,8 @@ if __name__ == '__main__':
         throwOnError: false,
       });
     }
-    notice = `Reading "${ep.title}" — rendered with KaTeX below the Ledger. This is how it will look on the web.`;
+    readerEl?.scrollIntoView({ behavior: "smooth", block: "start" });
+    notice = `Now reading "${ep.title}" at the top of the Article tab — rendered with KaTeX, as it will look on the web.`;
   }
 
   async function refresh() {
@@ -328,6 +329,18 @@ if __name__ == '__main__':
   {/if}
 
   {#if view === "article"}
+    {#if reading}
+      <section class="panel reader reader-top">
+        <div class="reader-head">
+          <div>
+            <h2>{reading.number ? `#${reading.number} : ` : ""}{reading.title}</h2>
+            <p class="small">{reading.stage} · rendered as it will appear on the web · equations via KaTeX</p>
+          </div>
+          <button disabled={busy} onclick={() => { reading = null; readerHTML = ""; }}>Close reader</button>
+        </div>
+        <div class="article-body" bind:this={readerEl}>{@html readerHTML}</div>
+      </section>
+    {/if}
     <div class="grid">
       <section class="panel">
         <h2>Bring research in — Python payload</h2>
@@ -376,20 +389,7 @@ if __name__ == '__main__':
       </section>
     </div>
 
-    {#if reading}
-      <section class="panel reader">
-        <div class="reader-head">
-          <div>
-            <h2>{reading.number ? `#${reading.number} : ` : ""}{reading.title}</h2>
-            <p class="small">{reading.stage} · rendered as it will appear on the web · equations via KaTeX</p>
-          </div>
-          <button disabled={busy} onclick={() => { reading = null; readerHTML = ""; }}>Close reader</button>
-        </div>
-        <div class="article-body" bind:this={readerEl}>{@html readerHTML}</div>
-      </section>
-    {:else}
-      <p class="small reader-hint">Tip: click <strong>Read</strong> on any Ledger entry to read it here, rendered with equations — before you decide to Mine &amp; lock it.</p>
-    {/if}
+      <p class="small reader-hint">Tip: click <strong>Read</strong> on any Ledger entry — it opens at the top of this tab, rendered with equations, before you decide to Mine &amp; lock it.</p>
   {/if}
 
   {#if view === "reels"}
@@ -520,6 +520,7 @@ if __name__ == '__main__':
   @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
   .project-strip { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 14px; }
   .reader { margin-top: 16px; }
+  .reader-top { margin-top: 0; margin-bottom: 16px; }
   .reader-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 6px; }
   .reader-hint { margin-top: 12px; }
   .article-body { line-height: 1.65; font-size: 15px; overflow-wrap: break-word; }
