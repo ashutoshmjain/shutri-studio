@@ -140,6 +140,8 @@ async function demo(cmd: string, a: Record<string, unknown>): Promise<unknown> {
       return { path: String(a.dest ?? "demo"), is_git_repo: true, remote: String(a.url ?? ""), episode_count: 0, mempool_count: 0 };
     case "list_episodes":
       return demoEpisodes;
+    case "read_episode":
+      return "# Demo episode\n\nRendered preview needs the desktop app. Inline math $E = mc^2$ renders with KaTeX there.\n";
     case "ingest_python": {
       const ep: Episode = { number: null, slug: "ingested-research", title: "Ingested Research (demo)", path: "demo/src/_ingested-research.md", stage: "mempool", has_clips: false };
       demoEpisodes = [...demoEpisodes, ep];
@@ -205,6 +207,8 @@ export const api = {
     call<Episode>("create_draft", { path, slug, title, body }),
   ingestPython: (path: string, source: string) =>
     call<Episode>("ingest_python", { path, source }),
+  readEpisode: (path: string, fileName: string) =>
+    call<string>("read_episode", { path, fileName }),
   promoteEpisode: (path: string, slug: string) => call<Episode>("promote_episode", { path, slug }),
   buildBook: (path: string) => call<string>("build_book", { path }),
   gitStatus: (path: string) => call<GitStatus>("git_status", { path }),

@@ -44,6 +44,11 @@ fn ingest_python(path: String, source: String) -> CmdResult<episodes::Episode> {
 }
 
 #[tauri::command]
+fn read_episode(path: String, file_name: String) -> CmdResult<String> {
+    episodes::read_episode(&pb(&path), &file_name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn promote_episode(path: String, slug: String) -> CmdResult<episodes::Episode> {
     episodes::promote(&pb(&path), &slug).map_err(|e| e.to_string())
 }
@@ -204,6 +209,7 @@ fn main() {
             list_episodes,
             create_draft,
             ingest_python,
+            read_episode,
             promote_episode,
             build_book,
             git_status,

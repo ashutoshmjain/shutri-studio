@@ -84,6 +84,15 @@ pub fn list_episodes(project: &Path) -> Result<Vec<Episode>> {
     Ok(out)
 }
 
+/// Read one episode/draft file from `src/` for the in-app reader.
+/// Only a bare `.md` file name is accepted — never a path outside src/.
+pub fn read_episode(project: &Path, file_name: &str) -> Result<String> {
+    if file_name.contains(['/', '\\']) || !file_name.ends_with(".md") {
+        return crate::msg("episode file must be a .md file name inside src/");
+    }
+    Ok(std::fs::read_to_string(project.join("src").join(file_name))?)
+}
+
 pub fn next_number(project: &Path) -> Result<u32> {
     Ok(list_episodes(project)?
         .iter()
@@ -208,6 +217,15 @@ mod tests {
         assert!(summary.contains("    - [1 : Quantum Memory](1.md)"), "{summary}");
         assert!(summary.contains("- [template](template.md)"), "{summary}");
         assert!(!summary.contains("_quantum-memory.md"), "{summary}");
+    }
+
+    #[test]
+    fn read_episode_stays_inside_src() {
+        let d = proj();
+        std::fs::write(d.path().join("src/_a.md"), "# A\n\nbody $x^2$\n").unwrap();
+        assert!(read_episode(d.path(), "_a.md").unwrap().contains("$x^2$"));
+        assert!(read_episode(d.path(), "../SUMMARY.md").is_err());
+        assert!(read_episode(d.path(), "a.txt").is_err());
     }
 
     #[test]

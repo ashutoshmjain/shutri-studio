@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
+  import { marked } from "marked";
+  import renderMathInElement from "katex/contrib/auto-render";
+  import "katex/dist/katex.min.css";
   import { api, inTauri, pickFolder, pickPayloadFile, type Channel, type Clip, type Episode, type GitStatus, type ProjectInfo } from "./lib/api";
 
   type View = "guide" | "article" | "reels" | "publish" | "identity";
@@ -69,8 +72,33 @@ if __name__ == '__main__':
     finally { busy = false; activity = ""; }
   }
 
+  let reading: Episode | null = null;
+  let readerHTML = "";
+  let readerEl: HTMLDivElement | null = null;
+
+  async function openEpisode(ep: Episode) {
+    const fileName = ep.path.replace(/\\/g, "/").split("/").pop() ?? "";
+    const text = await run("Loading episode for reading", () => api.readEpisode(projectPath, fileName));
+    if (text === null) return;
+    reading = ep;
+    readerHTML = marked.parse(text) as string;
+    await tick();
+    if (readerEl) {
+      renderMathInElement(readerEl, {
+        delimiters: [
+          { left: "$$", right: "$$", display: true },
+          { left: "$", right: "$", display: false },
+        ],
+        throwOnError: false,
+      });
+    }
+    notice = `Reading "${ep.title}" — rendered with KaTeX below the Ledger. This is how it will look on the web.`;
+  }
+
   async function refresh() {
     if (!projectPath) return;
+    const info = await run("Refreshing project", () => api.inspectProject(projectPath));
+    if (info) project = info;
     const eps = await run("Loading episodes", () => api.listEpisodes(projectPath));
     if (eps) episodes = eps;
     const g = await run("Loading Git status", () => api.gitStatus(projectPath));
@@ -324,9 +352,12 @@ if __name__ == '__main__':
               <strong>{ep.number ? `#${ep.number} : ` : ""}{ep.title}</strong>
               <div class="small">{ep.stage}{ep.has_clips ? " · has clips" : ""} · <span class="mono">{ep.path}</span></div>
             </div>
-            {#if ep.number === null}
-              <button class="accent" disabled={busy} onclick={() => promote(ep)}>Mine &amp; lock</button>
-            {/if}
+            <div class="row">
+              <button disabled={busy} title="Read this episode rendered, with equations" onclick={() => openEpisode(ep)}>Read</button>
+              {#if ep.number === null}
+                <button class="accent" disabled={busy} onclick={() => promote(ep)}>Mine &amp; lock</button>
+              {/if}
+            </div>
           </article>
         {/each}
         <button disabled={busy || !projectPath} onclick={build}>Build mdBook (web channel)</button>
@@ -344,6 +375,21 @@ if __name__ == '__main__':
         <p class="small">Research is morphed into a narrative conversation first; the KaTeX article derives from it.</p>
       </section>
     </div>
+
+    {#if reading}
+      <section class="panel reader">
+        <div class="reader-head">
+          <div>
+            <h2>{reading.number ? `#${reading.number} : ` : ""}{reading.title}</h2>
+            <p class="small">{reading.stage} · rendered as it will appear on the web · equations via KaTeX</p>
+          </div>
+          <button disabled={busy} onclick={() => { reading = null; readerHTML = ""; }}>Close reader</button>
+        </div>
+        <div class="article-body" bind:this={readerEl}>{@html readerHTML}</div>
+      </section>
+    {:else}
+      <p class="small reader-hint">Tip: click <strong>Read</strong> on any Ledger entry to read it here, rendered with equations — before you decide to Mine &amp; lock it.</p>
+    {/if}
   {/if}
 
   {#if view === "reels"}
@@ -473,6 +519,16 @@ if __name__ == '__main__':
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
   .project-strip { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 14px; }
+  .reader { margin-top: 16px; }
+  .reader-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 6px; }
+  .reader-hint { margin-top: 12px; }
+  .article-body { line-height: 1.65; font-size: 15px; overflow-wrap: break-word; }
+  .article-body h1, .article-body h2, .article-body h3 { line-height: 1.25; }
+  .article-body img, .article-body video { max-width: 100%; }
+  .article-body pre { background: var(--wash); padding: 12px; border-radius: 8px; overflow: auto; }
+  .article-body table { border-collapse: collapse; display: block; overflow-x: auto; }
+  .article-body th, .article-body td { border: 1px solid var(--line); padding: 5px 9px; }
+  .article-body blockquote { border-left: 3px solid var(--line); margin-left: 0; padding-left: 14px; color: var(--ink-2); }
   .pathrow { display: flex; gap: 8px; }
   .pathrow input { flex: 1; }
   .pathrow button { white-space: nowrap; }
