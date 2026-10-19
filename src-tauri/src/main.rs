@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use shutri_core::{bundle, channels, episodes, git, ingest, jobs::Jobs, nostr, plan, project};
+use shutri_core::{bundle, channels, episodes, git, ingest, jobs::Jobs, nostr, plan, project, transcribe};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -41,6 +41,56 @@ fn create_draft(path: String, slug: String, title: String, body: String) -> CmdR
 #[tauri::command]
 fn ingest_python(path: String, source: String) -> CmdResult<episodes::Episode> {
     ingest::ingest_python_script(&pb(&path), &pb(&source)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_episode(path: String, file_name: String) -> CmdResult<String> {
+    episodes::delete_episode(&pb(&path), &file_name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ingest_markdown(path: String, source: String) -> CmdResult<episodes::Episode> {
+    ingest::ingest_markdown_file(&pb(&path), &pb(&source)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn upload_audio(path: String, episode: u32, source: String) -> CmdResult<String> {
+    transcribe::copy_audio(&pb(&path), episode, &pb(&source))
+        .map(|d| d.to_string_lossy().to_string())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn transcribe_episode(path: String, episode: u32, audio_file: String, binary: String, model: String) -> CmdResult<serde_json::Value> {
+    use shutri_core::transcribe::Transcriber;
+    let audio = bundle::episode_dir(&pb(&path), episode).join("audio").join(&audio_file);
+    let engine = transcribe::WhisperCpp { binary: if binary.trim().is_empty() { "whisper-cli".into() } else { binary } };
+    let words = engine.transcribe(&audio, &pb(&model)).map_err(|e| e.to_string())?;
+    let n = transcribe::save_transcription(&pb(&path), episode, &words).map_err(|e| e.to_string())?;
+    let text = words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+    Ok(serde_json::json!({"words": n, "text": text}))
+}
+
+#[tauri::command]
+fn plan_from_episode(path: String, episode: u32, target_secs: f64) -> CmdResult<plan::Plan> {
+    let words = transcribe::load_words(&pb(&path), episode).map_err(|e| e.to_string())?;
+    let mut p = plan::plan_from_words(&words, target_secs);
+    for c in &mut p { c.sync_distribution_fields(); }
+    let dest = bundle::episode_dir(&pb(&path), episode).join("plan.json");
+    if let Some(parent) = dest.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+    std::fs::write(&dest, serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    Ok(p)
+}
+
+#[tauri::command]
+fn open_episode_file(path: String, file_name: String) -> CmdResult<String> {
+    if file_name.contains(['/', '\\']) || !file_name.ends_with(".md") {
+        return Err("episode file must be a .md file name inside src/".into());
+    }
+    let full = pb(&path).join("src").join(&file_name);
+    if !full.exists() { return Err(format!("{} does not exist", full.display())); }
+    open_in_browser(&full.to_string_lossy());
+    Ok(format!("Opened {} in your default editor/viewer.", full.display()))
 }
 
 #[tauri::command]
@@ -283,6 +333,12 @@ fn main() {
             list_episodes,
             create_draft,
             ingest_python,
+            ingest_markdown,
+            delete_episode,
+            open_episode_file,
+            upload_audio,
+            transcribe_episode,
+            plan_from_episode,
             read_episode,
             promote_episode,
             build_book,

@@ -71,6 +71,13 @@ export async function pickFolder(): Promise<string | null> {
   return typeof picked === "string" ? picked : null;
 }
 
+export async function pickFile(title: string, name: string, extensions: string[]): Promise<string | null> {
+  if (!inTauri) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({ directory: false, multiple: false, title, filters: [{ name, extensions }] });
+  return typeof picked === "string" ? picked : null;
+}
+
 /** Native picker for the LLM packaging payload (.py). */
 export async function pickPayloadFile(): Promise<string | null> {
   if (!inTauri) return null;
@@ -140,6 +147,21 @@ async function demo(cmd: string, a: Record<string, unknown>): Promise<unknown> {
       return { path: String(a.dest ?? "demo"), is_git_repo: true, remote: String(a.url ?? ""), episode_count: 0, mempool_count: 0 };
     case "list_episodes":
       return demoEpisodes;
+    case "delete_episode":
+      return "Demo Draft";
+    case "ingest_markdown": {
+      const ep: Episode = { number: null, slug: "uploaded-notes", title: "Uploaded Notes (demo)", path: "demo/src/_uploaded-notes.md", stage: "mempool", has_clips: false };
+      demoEpisodes = [...demoEpisodes, ep];
+      return ep;
+    }
+    case "open_episode_file":
+      return "Demo: would open the file in your editor.";
+    case "upload_audio":
+      return "demo/episodes/1/audio/demo.mp3";
+    case "transcribe_episode":
+      return { words: 42, text: "Demo transcript words with timing." };
+    case "plan_from_episode":
+      return demoPlan("Demo clip one from real timing. And a second sentence here for the plan.", 20);
     case "read_episode":
       return "# Demo episode\n\nRendered preview needs the desktop app. Inline math $E = mc^2$ renders with KaTeX there.\n";
     case "ingest_python": {
@@ -215,6 +237,18 @@ export const api = {
     call<Episode>("ingest_python", { path, source }),
   readEpisode: (path: string, fileName: string) =>
     call<string>("read_episode", { path, fileName }),
+  deleteEpisode: (path: string, fileName: string) =>
+    call<string>("delete_episode", { path, fileName }),
+  ingestMarkdown: (path: string, source: string) =>
+    call<Episode>("ingest_markdown", { path, source }),
+  openEpisodeFile: (path: string, fileName: string) =>
+    call<string>("open_episode_file", { path, fileName }),
+  uploadAudio: (path: string, episode: number, source: string) =>
+    call<string>("upload_audio", { path, episode, source }),
+  transcribeEpisode: (path: string, episode: number, audioFile: string, binary: string, model: string) =>
+    call<{ words: number; text: string }>("transcribe_episode", { path, episode, audioFile, binary, model }),
+  planFromEpisode: (path: string, episode: number, targetSecs: number) =>
+    call<Clip[]>("plan_from_episode", { path, episode, targetSecs }),
   promoteEpisode: (path: string, slug: string) => call<Episode>("promote_episode", { path, slug }),
   buildBook: (path: string) => call<string>("build_book", { path }),
   startPreview: (path: string) => call<string>("start_preview", { path }),

@@ -220,6 +220,23 @@ mod tests {
     }
 
     #[test]
+    fn delete_mempool_and_template_but_not_clipped() {
+        let d = proj();
+        let ep = create_draft(d.path(), "to-delete", "To Delete", "body").unwrap();
+        assert_eq!(delete_episode(d.path(), "_to-delete.md").unwrap(), "To Delete");
+        assert!(!d.path().join("src/_to-delete.md").exists());
+        let summary = std::fs::read_to_string(d.path().join("src/SUMMARY.md")).unwrap();
+        assert!(!summary.contains("to-delete.md"));
+        let mined = promote(d.path(), "quantum-memory").unwrap_or_else(|_| {
+            create_draft(d.path(), "qm2", "QM Two", "b").unwrap();
+            promote(d.path(), "qm2").unwrap()
+        });
+        let fname = format!("{}.md", mined.number.unwrap());
+        assert!(delete_episode(d.path(), &fname).is_ok());
+        let _ = ep;
+    }
+
+    #[test]
     fn read_episode_stays_inside_src() {
         let d = proj();
         std::fs::write(d.path().join("src/_a.md"), "# A\n\nbody $x^2$\n").unwrap();
@@ -242,4 +259,22 @@ mod tests {
         assert!(summary.contains("    - [Fresh Draft](_fresh-draft.md)"), "{summary}");
         assert!(!summary.contains("stale.md"), "{summary}");
     }
+}
+
+/// Delete a mempool draft or a template episode (its article file).
+/// Chain content is immutable by construction — sealed episodes are not
+/// listed from src/ files this function can reach with clips attached:
+/// an episode that already has a plan/clips is refused, never orphaned.
+pub fn delete_episode(project: &Path, file_name: &str) -> Result<String> {
+    let eps = list_episodes(project)?;
+    let ep = eps
+        .iter()
+        .find(|e| e.path.file_name().map(|n| n.to_string_lossy() == file_name).unwrap_or(false))
+        .ok_or_else(|| crate::CoreError::Msg(format!("no such episode file {file_name}")))?;
+    if ep.has_clips {
+        return crate::msg("this episode already has a clip plan/bundle — refusing to delete it and orphan episodes/<N>/. Remove the bundle first if you really mean it.");
+    }
+    std::fs::remove_file(&ep.path)?;
+    sync_summary(project)?;
+    Ok(ep.title.clone())
 }

@@ -3,7 +3,7 @@
   import { marked } from "marked";
   import renderMathInElement from "katex/contrib/auto-render";
   import "katex/dist/katex.min.css";
-  import { api, inTauri, pickFolder, pickPayloadFile, type Channel, type Clip, type Episode, type GitStatus, type ProjectInfo } from "./lib/api";
+  import { api, inTauri, pickFile, pickFolder, pickPayloadFile, type Channel, type Clip, type Episode, type GitStatus, type ProjectInfo } from "./lib/api";
 
   type View = "guide" | "article" | "reels" | "publish" | "identity";
   let view: View = "guide";
@@ -178,6 +178,20 @@ if __name__ == '__main__':
         "What just happened: Studio pulled the raw_markdown out of your Python file and stored it in src/ as a mempool draft, and SUMMARY.md now lists it. It has no permanent URL yet. Read it in the Ledger, make the NotebookLM audio, and Mine & lock only when that audio is final.");
     }
   }
+  let mdPath = "";
+  async function browseMarkdown() {
+    error = ""; notice = "";
+    try {
+      const picked = await pickFile("Choose a Markdown file", "Markdown", ["md", "markdown"]);
+      if (picked) { mdPath = picked; notice = `Markdown chosen: ${picked}. Now click "Upload into mempool".`; }
+      else if (!inTauri) notice = "File picker needs the desktop app; in the demo, type a path and the upload is simulated.";
+      else notice = "Markdown selection cancelled.";
+    } catch (e) { error = `Markdown picker failed: ${e instanceof Error ? e.message : String(e)}`; }
+  }
+  async function uploadMarkdown() {
+    const ep = await run("Uploading Markdown into the mempool", () => api.ingestMarkdown(projectPath, mdPath));
+    if (ep) { mdPath = ""; await refresh(); say(`Uploaded "${ep.title}" into the mempool as _${ep.slug}.md.`, "The file was copied into src/ and listed in SUMMARY.md — the original stays where it was. Read it in the Ledger; edit it there with the Edit button (opens your Notepad/gVim) at any time."); }
+  }
   async function openProject() {
     const p = await run("Opening project", () => api.inspectProject(projectPath));
     if (p) { project = p; await refresh(); }
@@ -193,6 +207,20 @@ if __name__ == '__main__':
   async function promote(ep: Episode) {
     const mined = await run("Mining episode & locking number", () => api.promoteEpisode(projectPath, ep.slug));
     if (mined) { await refresh(); say(`Mined as episode ${mined.number} — permanent URL assigned.`, "What just happened: the draft was renamed to " + mined.number + ".md, its title was numbered, and SUMMARY.md moved it from mempool to template. This is the URL to paste into your Spotify episode description. It will never be renumbered, even if you edit the text."); }
+  }
+  function fileNameOf(ep: Episode) { return ep.path.replace(/\\/g, "/").split("/").pop() ?? ""; }
+  async function editEpisode(ep: Episode) {
+    const out = await run("Opening file in your editor", () => api.openEpisodeFile(projectPath, fileNameOf(ep)));
+    if (out) say(out, "Edit and save in your editor, then Read again here or Build to refresh the book. Studio re-reads the file from disk every time — there is no second copy to sync.");
+  }
+  async function removeEpisode(ep: Episode) {
+    if (!window.confirm(`Delete "${ep.title}" (${fileNameOf(ep)})?\n\nThis removes the article file and its SUMMARY.md entry. ${ep.number ? "It is a numbered template episode; its episodes/ bundle, if any, is left untouched only when no plan exists." : "It is a mempool draft."} This cannot be undone except through Git.`)) return;
+    const title = await run("Deleting article", () => api.deleteEpisode(projectPath, fileNameOf(ep)));
+    if (title !== null) {
+      if (reading && fileNameOf(reading) === fileNameOf(ep)) { reading = null; readerHTML = ""; }
+      await refresh();
+      say(`Deleted "${title}".`, "The file and its SUMMARY.md entry are gone. If the project is a Git repo you can still recover it from history until you commit the deletion. Sealed chain episodes are never deletable here.");
+    }
   }
   async function build() {
     const log = await run("Building mdBook (this can take a moment)", () => api.buildBook(projectPath));
@@ -210,6 +238,44 @@ if __name__ == '__main__':
   async function stopPreview() {
     const out = await run("Stopping preview server", () => api.stopPreview());
     if (out !== null) { previewOn = false; say(out, "Port 3000 is free again. Your book/ output and project files are untouched."); }
+  }
+  let audioPath = "";
+  let uploadedAudioName = "";
+  let whisperBinary = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-whisper-bin") ?? "whisper-cli") : "whisper-cli";
+  let whisperModel = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-whisper-model") ?? "") : "";
+  async function browseAudio() {
+    error = ""; notice = "";
+    try {
+      const picked = await pickFile("Choose the original NotebookLM audio", "Audio", ["mp3", "wav", "m4a", "flac", "ogg"]);
+      if (picked) { audioPath = picked; notice = `Audio chosen: ${picked}. Now click "Upload audio into episode".`; }
+      else if (!inTauri) notice = "File picker needs the desktop app; in the demo, uploads are simulated.";
+      else notice = "Audio selection cancelled.";
+    } catch (e) { error = `Audio picker failed: ${e instanceof Error ? e.message : String(e)}`; }
+  }
+  async function doUploadAudio() {
+    const dest = await run("Copying audio into the episode bundle", () => api.uploadAudio(projectPath, planEpisode, audioPath));
+    if (dest) {
+      uploadedAudioName = dest.replace(/\\/g, "/").split("/").pop() ?? "";
+      say(`Audio stored for episode ${planEpisode}: ${uploadedAudioName}`,
+        "What just happened: the ORIGINAL NotebookLM audio was copied into episodes/" + planEpisode + "/audio/. Your Audacity podcast edit stays outside Studio. Next: run Transcribe to get word-level timing for the Narrative and clips.");
+    }
+  }
+  async function browseModel() {
+    const picked = await pickFile("Choose the Whisper model file (.bin)", "Whisper model", ["bin"]).catch(() => null);
+    if (picked) { whisperModel = picked; try { localStorage.setItem("studio-whisper-model", picked); } catch {} notice = `Whisper model set: ${picked}`; }
+  }
+  async function doTranscribe() {
+    try { localStorage.setItem("studio-whisper-bin", whisperBinary); localStorage.setItem("studio-whisper-model", whisperModel); } catch {}
+    const out = await run("Transcribing audio with Whisper (word-level — can take minutes)", () => api.transcribeEpisode(projectPath, planEpisode, uploadedAudioName, whisperBinary, whisperModel));
+    if (out) {
+      transcript = out.text;
+      say(`Transcribed ${out.words} words with timestamps for episode ${planEpisode}.`,
+        "What you have now: episodes/" + planEpisode + "/transcription.json (every word timed) and narrative.md (the readable conversation). The transcript is shown below. Set the target seconds and click Break into clips (real timing) — boundaries will snap to real word ends, then edit each segment and Save plan.json.");
+    }
+  }
+  async function doPlanReal() {
+    const p = await run("Breaking episode into clips from real word timing", () => api.planFromEpisode(projectPath, planEpisode, targetSecs));
+    if (p) { plan = p; say(`${p.length} clips planned for episode ${planEpisode} and saved to plan.json.`, "Boundaries snapped to sentence ends using the Whisper word timestamps — not estimates. Now the creative edit: retitle clips, nudge speech start/end seconds, add music segments with crossfades, remove what drags. Save plan.json after editing."); }
   }
   async function makePlan() {
     const p = await run("Breaking transcript into clips", () => api.planFromTranscript(transcript, targetSecs));
@@ -253,6 +319,7 @@ if __name__ == '__main__':
   onMount(async () => { channels = await api.listChannels().catch(() => []); previewOn = await api.previewRunning().catch(() => false); });
 </script>
 
+<svelte:window onkeydown={(e: KeyboardEvent) => { if (e.key === "Escape") help = ""; }} />
 <header class="topbar">
   <div>
     <div class="brand">Shutri Studio</div>
@@ -395,6 +462,8 @@ if __name__ == '__main__':
             </div>
             <div class="row">
               <button disabled={busy} title="Read this episode rendered, with equations" onclick={() => openEpisode(ep)}>Read</button>
+              <button disabled={busy} title="Open the .md file in your default editor (Notepad, gVim, …)" onclick={() => editEpisode(ep)}>Edit</button>
+              <button class="danger" disabled={busy} title="Delete this article (mempool and template only — sealed chain content is immutable)" onclick={() => removeEpisode(ep)}>Delete</button>
               {#if ep.number === null}
                 <button class="accent" disabled={busy} onclick={() => promote(ep)}>Mine &amp; lock</button>
                 <button class="ibtn" title="What does Mine & lock do?" onclick={() => showHelp("mine")}>i</button>
@@ -424,6 +493,15 @@ if __name__ == '__main__':
         <label for="bdy">Narrative / notes</label>
         <textarea id="bdy" bind:value={body} placeholder="The conversation this episode will become…"></textarea>
         <button class="primary" disabled={busy || !projectPath || !slug || !title} onclick={createDraft}>Add to mempool</button>
+        <h3>…or upload a Markdown file</h3>
+        <p class="small">Already have the paper as <span class="mono">.md</span> (for example from an external editor)? Upload it and it becomes a mempool draft with its title taken from the <span class="mono"># H1</span>.</p>
+        <div class="pathrow">
+          <input bind:value={mdPath} placeholder="C:\Users\you\Documents\paper.md" aria-label="Markdown file to upload" />
+          <button disabled={busy} onclick={browseMarkdown}>Browse .md…</button>
+        </div>
+        <div class="row">
+          <button disabled={busy || !projectPath || !mdPath} title={!projectPath ? "Open a project first" : !mdPath ? "Choose a .md file first" : "Upload as a mempool draft"} onclick={uploadMarkdown}>Upload into mempool</button>
+        </div>
         <p class="small">Research is morphed into a narrative conversation first; the KaTeX article derives from it.</p>
       </section>
     </div>
@@ -434,7 +512,33 @@ if __name__ == '__main__':
   {#if view === "reels"}
     <div class="grid">
       <section class="panel">
-        <h2>Narrative → clips</h2>
+        <h2>Episode audio → transcription</h2>
+        <p class="small">Upload the <strong>original NotebookLM audio</strong> for a mined episode (your Audacity podcast edit stays outside Studio). Whisper turns it into word-level timing — the basis of the Narrative and of every clip boundary.</p>
+        <div class="row">
+          <div><label for="pe">Episode number</label><input id="pe" type="number" min="1" bind:value={planEpisode} /></div>
+          <div><label for="tg">Target seconds per clip (under 180 for Shorts)</label><input id="tg" type="number" min="10" max="180" bind:value={targetSecs} /></div>
+        </div>
+        <label>Audio file (NotebookLM original)</label>
+        <div class="pathrow">
+          <input bind:value={audioPath} placeholder="C:\Users\you\Downloads\episode-audio.mp3" aria-label="Audio file" />
+          <button disabled={busy} onclick={browseAudio}>Browse audio…</button>
+        </div>
+        <div class="row">
+          <button class="primary" disabled={busy || !projectPath || !audioPath} title={!projectPath ? "Open a project first" : !audioPath ? "Choose an audio file first" : "Copy the audio into episodes/<N>/audio/"} onclick={doUploadAudio}>Upload audio into episode</button>
+        </div>
+        <label for="wb">Whisper program (whisper.cpp)</label>
+        <input id="wb" bind:value={whisperBinary} placeholder="whisper-cli" />
+        <label>Whisper model file (.bin)</label>
+        <div class="pathrow">
+          <input bind:value={whisperModel} placeholder="C:\whisper\ggml-large-v3.bin" aria-label="Whisper model file" />
+          <button disabled={busy} onclick={browseModel}>Browse model…</button>
+        </div>
+        <div class="row">
+          <button class="primary" disabled={busy || !projectPath || !uploadedAudioName} title={!uploadedAudioName ? "Upload the audio first" : "Run whisper-cli and save transcription.json + narrative.md"} onclick={doTranscribe}>Transcribe (Whisper)</button>
+          <button class="accent" disabled={busy || !projectPath} title="Plan clips from the saved transcription.json (real word timing) and save plan.json" onclick={doPlanReal}>Break into clips (real timing)</button>
+        </div>
+        {#if !uploadedAudioName}<p class="small">Transcribe enables after the audio upload. No whisper-cli yet? Install whisper.cpp, download a ggml model (.bin), and point both fields at them — transcription runs fully offline on your machine.</p>{/if}
+        <h3>…or paste a transcript (estimated timing)</h3>
         <label for="tr">Transcript (conversation)</label>
         <textarea id="tr" class="tall" bind:value={transcript}></textarea>
         <div class="row">
@@ -456,7 +560,7 @@ if __name__ == '__main__':
         {#each plan as clip}
           <article class="clip">
             <header>
-              <strong>Clip {clip.num}: {clip.title}</strong>
+              <span>Clip {clip.num}:</span><input class="clip-title" bind:value={clip.title} aria-label="Clip title" />
               <button disabled={busy} onclick={() => addMusic(clip)}>+ Music segment</button>
             </header>
             {#each clip.segments as seg, i}
@@ -464,7 +568,11 @@ if __name__ == '__main__':
                 {#if seg.type === "music"}
                   <span>Music · <span class="mono">{seg.music_file}</span> · {seg.duration}s · fade {seg.crossfade}s</span>
                 {:else}
-                  <span>Speech · {seg.start.toFixed(1)}–{seg.end.toFixed(1)}s · {seg.text.slice(0, 90)}…</span>
+                  <span class="seg-edit">Speech
+                    <input type="number" step="0.1" min="0" bind:value={seg.start} aria-label="Segment start seconds" />–
+                    <input type="number" step="0.1" min="0" bind:value={seg.end} aria-label="Segment end seconds" />s
+                    <span class="seg-text">{seg.text.slice(0, 80)}…</span>
+                  </span>
                 {/if}
                 <button aria-label="Remove segment" onclick={() => removeSegment(clip, i)}>Remove</button>
               </div>
@@ -579,6 +687,12 @@ if __name__ == '__main__':
   .helppanel { position: fixed; left: 50%; transform: translateX(-50%); bottom: 58px; z-index: 41; width: min(680px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; box-shadow: 0 10px 30px rgba(28, 25, 23, 0.14); font-size: 14px; line-height: 1.5; }
   .helppanel p { margin: 0 0 8px; }
   .ibtn { width: 26px; height: 26px; padding: 0; border-radius: 50%; font-family: Georgia, serif; font-style: italic; font-weight: 700; flex: none; }
+  button.danger { color: #b91c1c; border-color: #fecaca; }
+  button.danger:hover { background: #fef2f2; }
+  .clip-title { flex: 1; font-weight: 600; }
+  .seg-edit { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .seg-edit input { width: 84px; }
+  .seg-text { color: var(--muted); }
   .spinner { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

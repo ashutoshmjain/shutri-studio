@@ -6,3 +6,4 @@ src = "src"
 [preprocessor.katex]
 
 [output.html]
+additional-css = ["theme/studio.css"]

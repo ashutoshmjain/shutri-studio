@@ -32,7 +32,7 @@ pub fn extract_raw_markdown(source: &str) -> Result<String> {
     Ok(text)
 }
 
-fn slugify(title: &str) -> String {
+pub(crate) fn slugify(title: &str) -> String {
     let mut out = String::new();
     let mut dash = false;
     for c in title.chars() {
@@ -45,6 +45,32 @@ fn slugify(title: &str) -> String {
         }
     }
     out.trim_matches('-').chars().take(60).collect::<String>().trim_matches('-').to_string()
+}
+
+/// Ingest a plain Markdown file (from disk / external editor workflows)
+/// into the mempool. Title from the H1, else the file name.
+pub fn ingest_markdown_file(project: &Path, source: &Path) -> Result<Episode> {
+    let markdown = std::fs::read_to_string(source)?;
+    if markdown.trim().is_empty() {
+        return crate::msg("the Markdown file is empty");
+    }
+    let fallback = source.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "untitled".into());
+    let title = markdown
+        .lines()
+        .find_map(|l| l.strip_prefix("# "))
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or(fallback);
+    let slug = slugify(&title);
+    if slug.is_empty() {
+        return crate::msg("could not derive a slug from the Markdown title");
+    }
+    let body = if markdown.trim_start().starts_with("# ") {
+        markdown.split_once('\n').map(|(_, rest)| rest.trim_start_matches('\n').to_string()).unwrap_or_default()
+    } else {
+        markdown.clone()
+    };
+    create_draft(project, &slug, &title, &body)
 }
 
 /// Ingest a payload file into the mempool: extract, take the H1 as the
@@ -88,6 +114,17 @@ mod tests {
     fn rejects_non_payload() {
         assert!(extract_raw_markdown("print('hello')").is_err());
         assert!(extract_raw_markdown("raw_markdown = 'short'").is_err());
+    }
+
+    #[test]
+    fn ingests_plain_markdown_file() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("src")).unwrap();
+        let f = d.path().join("notes.md");
+        std::fs::write(&f, "# Solar Wind Notes\n\nBody with $B^2$ math.\n").unwrap();
+        let ep = ingest_markdown_file(d.path(), &f).unwrap();
+        assert_eq!(ep.slug, "solar-wind-notes");
+        assert!(std::fs::read_to_string(d.path().join("src/_solar-wind-notes.md")).unwrap().contains("$B^2$"));
     }
 
     #[test]

@@ -59,6 +59,11 @@ pub fn create(path: &Path, name: &str, template: &Template) -> Result<ProjectInf
     std::fs::create_dir_all(path.join("episodes"))?;
     std::fs::create_dir_all(path.join(".studio"))?;
     std::fs::write(path.join("book.toml"), template.book_toml.replace("{name}", name))?;
+    std::fs::create_dir_all(path.join("theme"))?;
+    std::fs::write(
+        path.join("theme/studio.css"),
+        "/* Shutri Studio: mdBook's automatic section numbers (1., 2.1., 3.1.)\n   duplicate the ledger's own episode numbering — hide them. */\n.chapter-item > a > strong[aria-hidden=\"true\"],\n.chapter-item > div > strong[aria-hidden=\"true\"] { display: none; }\n",
+    )?;
     std::fs::write(path.join(".gitignore"), "book/\n.studio/\n")?;
     std::fs::write(
         path.join("README.md"),
@@ -111,7 +116,7 @@ pub struct Template {
 impl Default for Template {
     fn default() -> Self {
         Self {
-            book_toml: "[book]\ntitle = \"{name}\"\nlanguage = \"en\"\nsrc = \"src\"\n\n[preprocessor.katex]\n\n[output.html]\n".into(),
+            book_toml: "[book]\ntitle = \"{name}\"\nlanguage = \"en\"\nsrc = \"src\"\n\n[preprocessor.katex]\n\n[output.html]\nadditional-css = [\"theme/studio.css\"]\n".into(),
         }
     }
 }
@@ -187,11 +192,13 @@ mod tests {
             "src/template.md",
             "src/chain.md",
             "src/_welcome.md",
+            "theme/studio.css",
         ] {
             assert!(p.join(f).exists(), "missing {f}");
         }
         assert!(p.join("episodes").is_dir());
         assert!(!p.join("src/ddma").exists());
+        assert!(std::fs::read_to_string(p.join("book.toml")).unwrap().contains("additional-css"));
         let summary = std::fs::read_to_string(p.join("src/SUMMARY.md")).unwrap();
         assert!(summary.contains("- [cover](cover.md)"), "{summary}");
         assert!(summary.contains("- [mempool](mempool.md)"), "{summary}");
