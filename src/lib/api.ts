@@ -161,6 +161,12 @@ async function demo(cmd: string, a: Record<string, unknown>): Promise<unknown> {
     }
     case "build_book":
       return "Demo build OK (mdbook runs in the desktop app).";
+    case "start_preview":
+      return "http://127.0.0.1:3000";
+    case "stop_preview":
+      return "Preview server stopped.";
+    case "preview_running":
+      return false;
     case "git_status":
       return { is_repo: true, branch: "main", remote: "git@github.com:you/research.git", dirty: [] };
     case "git_publish":
@@ -211,6 +217,9 @@ export const api = {
     call<string>("read_episode", { path, fileName }),
   promoteEpisode: (path: string, slug: string) => call<Episode>("promote_episode", { path, slug }),
   buildBook: (path: string) => call<string>("build_book", { path }),
+  startPreview: (path: string) => call<string>("start_preview", { path }),
+  stopPreview: () => call<string>("stop_preview"),
+  previewRunning: () => call<boolean>("preview_running"),
   gitStatus: (path: string) => call<GitStatus>("git_status", { path }),
   gitPublish: (path: string, message: string) => call<string>("git_publish", { path, message }),
   listChannels: () => call<Channel[]>("list_channels"),

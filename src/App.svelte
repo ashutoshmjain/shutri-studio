@@ -66,10 +66,35 @@ if __name__ == '__main__':
 
   let activity = "";
   async function run<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
-    busy = true; activity = label; error = ""; notice = "";
+    busy = true; activity = label; error = ""; notice = ""; detail = "";
     try { return await fn(); }
     catch (e) { error = `${label} failed: ${e instanceof Error ? e.message : String(e)}`; return null; }
     finally { busy = false; activity = ""; }
+  }
+
+  let verbose = typeof localStorage !== "undefined" ? localStorage.getItem("studio-verbose") !== "0" : true;
+  let detail = "";
+  let help = "";
+  let previewOn = false;
+  const HELP: Record<string, string> = {
+    build: "Build mdBook turns your src/ Markdown into a static website in the book/ folder (HTML, search index, KaTeX-rendered equations). Nothing goes online. It is the same output that will be published when you push. Rebuild after editing any draft or SUMMARY.md.",
+    preview: "Preview starts mdbook serve on http://127.0.0.1:3000 and opens it in your browser — your book exactly as readers will see it, served locally. It rebuilds itself when files change. Stop it when done; it only runs while this app keeps it running.",
+    mine: "Mine & lock assigns the next episode number, renames _draft.md to <N>.md, and rewrites SUMMARY.md. Do this only when the podcast audio is final: Spotify needs this episode's permanent URL, and a numbered episode is never renumbered.",
+    extract: "Extract reads the raw_markdown string out of your LLM's Python payload and writes it as a mempool draft (_slug.md), byte-for-byte, so $...$ equations survive. The title and slug come from the paper's # H1 line.",
+    publish: "Publish stages src/, episodes/ and book.toml in your project repo, commits with an automatic message, and pushes to its configured remote. It uses your own Git credentials; the app stores no tokens.",
+  };
+  function showHelp(topic: string) { help = HELP[topic] ?? ""; }
+  function say(short: string, long = "") {
+    notice = short;
+    detail = verbose ? long : "";
+  }
+  function toggleVerbose() {
+    verbose = !verbose;
+    try { localStorage.setItem("studio-verbose", verbose ? "1" : "0"); } catch {}
+    if (!verbose) detail = "";
+    notice = verbose
+      ? "Messages set to Verbose: I will explain what happened, why, and what to do next."
+      : "Messages set to Quiet: one-line confirmations only. Tap any i button for the full explanation.";
   }
 
   let reading: Episode | null = null;
@@ -149,7 +174,8 @@ if __name__ == '__main__':
       payloadPath = "";
       view = "article";
       await refresh();
-      notice = `In mempool: "${ep.title}" as _${ep.slug}.md — KaTeX preserved. Find it in the Ledger; Mine & lock it when the audio is final.`;
+      say(`In mempool: "${ep.title}" as _${ep.slug}.md — KaTeX preserved.`,
+        "What just happened: Studio pulled the raw_markdown out of your Python file and stored it in src/ as a mempool draft, and SUMMARY.md now lists it. It has no permanent URL yet. Read it in the Ledger, make the NotebookLM audio, and Mine & lock only when that audio is final.");
     }
   }
   async function openProject() {
@@ -158,7 +184,7 @@ if __name__ == '__main__':
   }
   async function createProject() {
     const p = await run("Creating fresh project (folders, SUMMARY.md, git init)", () => api.createProject(projectPath, projectName));
-    if (p) { project = p; await refresh(); notice = "Fresh project created: book.toml, src/SUMMARY.md (cover · mempool · template · chain), a _welcome mempool draft and an episodes/ folder — initialised as a Git repo. Next: Article tab, extract your Python payload."; }
+    if (p) { project = p; await refresh(); say("Fresh project created and initialised as a Git repo.", "What you have now: book.toml (the book settings), src/SUMMARY.md listing cover · mempool · template · chain, a _welcome mempool draft to experiment with, and an episodes/ folder for audio, plans and clips. Nothing exists online yet. Next step: open the Article tab and extract your first Python payload."); }
   }
   async function createDraft() {
     const ep = await run("Adding draft to mempool", () => api.createDraft(projectPath, slug, title, body));
@@ -166,11 +192,24 @@ if __name__ == '__main__':
   }
   async function promote(ep: Episode) {
     const mined = await run("Mining episode & locking number", () => api.promoteEpisode(projectPath, ep.slug));
-    if (mined) { await refresh(); notice = `Mined as episode ${mined.number} — permanent URL assigned. Never renumbered.`; }
+    if (mined) { await refresh(); say(`Mined as episode ${mined.number} — permanent URL assigned.`, "What just happened: the draft was renamed to " + mined.number + ".md, its title was numbered, and SUMMARY.md moved it from mempool to template. This is the URL to paste into your Spotify episode description. It will never be renumbered, even if you edit the text."); }
   }
   async function build() {
     const log = await run("Building mdBook (this can take a moment)", () => api.buildBook(projectPath));
-    if (log !== null) notice = "mdBook build finished. Preview is the book/ output.";
+    if (log !== null) say("mdBook build finished — the website is in the book/ folder.",
+      "What just happened: every page in src/ became HTML in book/, with equations rendered by KaTeX and a search index built. Nothing is online yet. Click Preview to read it at localhost:3000 exactly as readers will see it, or go to Publish when you are ready to push.");
+  }
+  async function startPreview() {
+    const url = await run("Starting preview server (mdbook serve)", () => api.startPreview(projectPath));
+    if (url) {
+      previewOn = true;
+      say(`Preview is live at ${url} — your browser should have opened it.`,
+        "What just happened: mdbook serve rebuilt the book and is serving it on your own machine at port 3000. Only you can see it. It rebuilds automatically when files change. Use Stop preview when finished; closing the preview does not publish anything.");
+    }
+  }
+  async function stopPreview() {
+    const out = await run("Stopping preview server", () => api.stopPreview());
+    if (out !== null) { previewOn = false; say(out, "Port 3000 is free again. Your book/ output and project files are untouched."); }
   }
   async function makePlan() {
     const p = await run("Breaking transcript into clips", () => api.planFromTranscript(transcript, targetSecs));
@@ -211,7 +250,7 @@ if __name__ == '__main__':
     if (ev) signedEvent = JSON.stringify(ev, null, 2);
   }
 
-  onMount(async () => { channels = await api.listChannels().catch(() => []); });
+  onMount(async () => { channels = await api.listChannels().catch(() => []); previewOn = await api.previewRunning().catch(() => false); });
 </script>
 
 <header class="topbar">
@@ -225,6 +264,7 @@ if __name__ == '__main__':
     <button class:active={view === "reels"} onclick={() => (view = "reels")}>Reels</button>
     <button class:active={view === "publish"} onclick={() => (view = "publish")}>Publish</button>
     <button class:active={view === "identity"} onclick={() => (view = "identity")}>Identity &amp; Channels</button>
+    <button title="Toggle how much the app explains" onclick={toggleVerbose}>Messages: {verbose ? "Verbose" : "Quiet"}</button>
   </nav>
 </header>
 
@@ -263,19 +303,6 @@ if __name__ == '__main__':
   </section>
   {/if}
 
-  <div class="statusbar" role="status" aria-live="polite">
-    {#if busy}
-      <span class="spinner" aria-hidden="true"></span><span>{activity}… please wait.</span>
-    {:else if error}
-      <span class="error">{error}</span>
-    {:else if notice}
-      <span class="ok">{notice}</span>
-    {:else if !project}
-      <span class="small">Ready. Start in the Guide: choose a folder, create a fresh project, then bring your research in from the Article tab.</span>
-    {:else}
-      <span class="small">Ready — project open. Article brings research in, Reels makes clips, Publish ships them.</span>
-    {/if}
-  </div>
 
   {#if view === "guide"}
     <div class="grid">
@@ -351,6 +378,7 @@ if __name__ == '__main__':
         </div>
         <div class="row">
           <button class="primary" disabled={busy || !projectPath || !payloadPath} title={!projectPath ? "Open a project first (Guide tab)" : !payloadPath ? "Choose a .py payload first" : "Extract raw_markdown into the mempool"} onclick={ingestPayload}>Extract into mempool</button>
+          <button class="ibtn" title="How does extraction work?" onclick={() => showHelp("extract")}>i</button>
         </div>
         {#if !projectPath}<p class="small">Needs an open project — create one in the Guide tab first.</p>
         {:else if !payloadPath}<p class="small">Choose the <span class="mono">.py</span> payload to enable extraction.</p>{/if}
@@ -369,11 +397,22 @@ if __name__ == '__main__':
               <button disabled={busy} title="Read this episode rendered, with equations" onclick={() => openEpisode(ep)}>Read</button>
               {#if ep.number === null}
                 <button class="accent" disabled={busy} onclick={() => promote(ep)}>Mine &amp; lock</button>
+                <button class="ibtn" title="What does Mine & lock do?" onclick={() => showHelp("mine")}>i</button>
               {/if}
             </div>
           </article>
         {/each}
-        <button disabled={busy || !projectPath} onclick={build}>Build mdBook (web channel)</button>
+        <div class="row">
+          <button disabled={busy || !projectPath} onclick={build}>Build mdBook (web channel)</button>
+          <button class="ibtn" title="What does Build do?" onclick={() => showHelp("build")}>i</button>
+          {#if previewOn}
+            <button class="accent" disabled={busy} onclick={stopPreview}>Stop preview</button>
+          {:else}
+            <button class="accent" disabled={busy || !projectPath} title={!projectPath ? "Open a project first" : "Serve the book on localhost:3000 and open it in your browser"} onclick={startPreview}>Preview site</button>
+          {/if}
+          <button class="ibtn" title="What does Preview do?" onclick={() => showHelp("preview")}>i</button>
+        </div>
+        <p class="small">{previewOn ? "Preview is running at http://127.0.0.1:3000 (reopen that address in your browser any time)." : "Build makes the static site in book/; Preview serves it on localhost:3000 so you can read it as readers will."}</p>
       </section>
 
       <section class="panel">
@@ -445,6 +484,7 @@ if __name__ == '__main__':
           {#each git.dirty as d}<div class="small mono">{d}</div>{/each}
         {:else}<p class="small">Open a project to see its Git state.</p>{/if}
         <button class="primary" disabled={busy || !projectPath} onclick={publish}>Stage, commit &amp; push</button>
+        <button class="ibtn" title="What does Publish do?" onclick={() => showHelp("publish")}>i</button>
         <p class="small">Uses your own Git credentials. The app stores no tokens and never picks a remote for you.</p>
       </section>
       <section class="panel">
@@ -484,6 +524,26 @@ if __name__ == '__main__':
     </div>
   {/if}
 </main>
+<footer class="statusbar" role="status" aria-live="polite">
+  {#if busy}
+    <span class="spinner" aria-hidden="true"></span><span>{activity}… please wait.</span>
+  {:else if error}
+    <span class="error">{error}</span>
+  {:else if notice}
+    <span class="ok">{notice}</span>{#if detail}<span class="detail">{detail}</span>{/if}
+  {:else if !project}
+    <span class="small">Ready. Start in the Guide: choose a folder, create a fresh project, then bring your research in from the Article tab.</span>
+  {:else}
+    <span class="small">Ready — project open. Article brings research in, Reels makes clips, Publish ships them.</span>
+  {/if}
+</footer>
+{#if help}
+  <div class="helppanel" role="note">
+    <p>{help}</p>
+    <button onclick={() => (help = "")}>Close help</button>
+  </div>
+{/if}
+
 
 <style>
   .topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 22px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
@@ -492,7 +552,7 @@ if __name__ == '__main__':
   nav { display: flex; gap: 8px; flex-wrap: wrap; }
   nav button.active { background: var(--ink); color: #fff; border-color: var(--ink); }
   .demo-banner { background: #fef3c7; color: var(--accent-ink); padding: 8px 22px; font-size: 13px; border-bottom: 1px solid var(--line); }
-  main { max-width: 1180px; margin: 0 auto; padding: 18px 22px 40px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 18px 22px 110px; }
   .project-bar { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
   .grow { flex: 1 1 220px; }
   .project-bar label { margin-top: 0; }
@@ -514,7 +574,11 @@ if __name__ == '__main__':
   .backup { background: #fef3c7; padding: 10px; border-radius: 8px; }
   .event { white-space: pre-wrap; background: var(--wash); padding: 10px; border-radius: 8px; max-height: 240px; overflow: auto; }
   .prompt { max-height: 300px; text-align: left; }
-  .statusbar { display: flex; align-items: center; gap: 9px; margin-top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 14px; font-size: 13px; min-height: 38px; }
+  .statusbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; background: var(--panel); border-top: 1px solid var(--line); padding: 9px 18px; font-size: 13px; min-height: 42px; box-shadow: 0 -4px 14px rgba(28, 25, 23, 0.06); }
+  .statusbar .detail { flex-basis: 100%; color: var(--ink-2); line-height: 1.45; }
+  .helppanel { position: fixed; left: 50%; transform: translateX(-50%); bottom: 58px; z-index: 41; width: min(680px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; box-shadow: 0 10px 30px rgba(28, 25, 23, 0.14); font-size: 14px; line-height: 1.5; }
+  .helppanel p { margin: 0 0 8px; }
+  .ibtn { width: 26px; height: 26px; padding: 0; border-radius: 50%; font-family: Georgia, serif; font-style: italic; font-weight: 700; flex: none; }
   .spinner { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

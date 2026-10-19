@@ -198,9 +198,83 @@ fn list_jobs(state: tauri::State<'_, Jobs>) -> Vec<shutri_core::jobs::Job> {
     state.list()
 }
 
+/// The one running `mdbook serve` preview child, if any.
+struct PreviewState(std::sync::Mutex<Option<std::process::Child>>);
+
+#[tauri::command]
+fn start_preview(path: String, state: tauri::State<'_, PreviewState>) -> CmdResult<String> {
+    let mut slot = state.0.lock().map_err(|_| "preview state poisoned".to_string())?;
+    if let Some(child) = slot.as_mut() {
+        match child.try_wait() {
+            Ok(Some(_)) => *slot = None,
+            Ok(None) => return Ok("http://127.0.0.1:3000".into()),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    let mut child = std::process::Command::new("mdbook")
+        .args(["serve", "--hostname", "127.0.0.1", "--port", "3000"])
+        .current_dir(&path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not start mdbook — is it installed and on PATH? ({e})"))?;
+    // Wait briefly for the port to accept, so the browser opens a live page.
+    let addr = "127.0.0.1:3000";
+    let mut up = false;
+    for _ in 0..40 {
+        if std::net::TcpStream::connect(addr).is_ok() { up = true; break; }
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(format!("mdbook serve exited early ({status}) — run Build mdBook once and check its output"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    if !up {
+        let _ = child.kill();
+        return Err("mdbook serve did not open port 3000 within 10 seconds".into());
+    }
+    *slot = Some(child);
+    open_in_browser("http://127.0.0.1:3000");
+    Ok("http://127.0.0.1:3000".into())
+}
+
+#[tauri::command]
+fn stop_preview(state: tauri::State<'_, PreviewState>) -> CmdResult<String> {
+    let mut slot = state.0.lock().map_err(|_| "preview state poisoned".to_string())?;
+    match slot.as_mut() {
+        Some(child) => {
+            child.kill().map_err(|e| e.to_string())?;
+            let _ = child.wait();
+            *slot = None;
+            Ok("Preview server stopped.".into())
+        }
+        None => Ok("Preview server was not running.".into()),
+    }
+}
+
+#[tauri::command]
+fn preview_running(state: tauri::State<'_, PreviewState>) -> bool {
+    let mut slot = match state.0.lock() { Ok(s) => s, Err(_) => return false };
+    match slot.as_mut() {
+        Some(child) => matches!(child.try_wait(), Ok(None)),
+        None => false,
+    }
+}
+
+fn open_in_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    let spawned = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    #[cfg(target_os = "macos")]
+    let spawned = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let spawned = std::process::Command::new("xdg-open").arg(url).spawn();
+    let _ = spawned;
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(PreviewState(std::sync::Mutex::new(None)))
         .manage(Jobs::new())
         .invoke_handler(tauri::generate_handler![
             inspect_project,
@@ -212,6 +286,9 @@ fn main() {
             read_episode,
             promote_episode,
             build_book,
+            start_preview,
+            stop_preview,
+            preview_running,
             git_status,
             git_publish,
             list_channels,
