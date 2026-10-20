@@ -52,23 +52,26 @@ pub struct RawToken {
     pub end: f64,
 }
 
-/// Merge subword (BPE) fragments into whole words: a token that does
-/// not start with whitespace continues the previous word, so
+/// Merge subword (BPE) fragments into whole words. A token starts a
+/// new word when it carries a word boundary marker — a leading space
+/// (whisper-style `" Inter"`) or a sentencepiece `▁` (transducer-style
+/// `"▁Internal"`) — and otherwise continues the previous word, so
 /// `[" Inter", "nal"]` becomes one word `Internal` spanning both
 /// token timestamps — never two clip-boundary targets mid-syllable.
 pub fn aggregate_tokens(tokens: &[RawToken]) -> Vec<Word> {
     let mut words: Vec<Word> = Vec::new();
     for tok in tokens {
-        if tok.text.trim().is_empty() || tok.text.trim_start().starts_with("[_") {
+        let text = tok.text.strip_prefix('▁').unwrap_or(&tok.text);
+        if text.trim().is_empty() || text.trim_start().starts_with("[_") {
             continue;
         }
-        let continues = !tok.text.starts_with(|c: char| c.is_whitespace()) && !words.is_empty();
-        if continues {
+        let boundary = tok.text.starts_with('▁') || tok.text.starts_with(|c: char| c.is_whitespace());
+        if !boundary && !words.is_empty() {
             let last = words.last_mut().unwrap();
-            last.text.push_str(tok.text.trim());
+            last.text.push_str(text.trim());
             last.end = tok.end.max(last.end);
         } else {
-            words.push(Word { text: tok.text.trim().to_string(), start: tok.start, end: tok.end });
+            words.push(Word { text: text.trim().to_string(), start: tok.start, end: tok.end });
         }
     }
     words
@@ -216,24 +219,31 @@ fn find_model(dir: &Path, names: &[&str]) -> Option<PathBuf> {
     None
 }
 
-/// (encoder, decoder, tokens) for the bundled Whisper ONNX model,
-/// or the names of the pieces still missing.
-pub fn sherpa_model_files(dir: &Path) -> (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>) {
+/// Default model: the offline Zipformer English transducer
+/// (`sherpa-onnx-zipformer-en-2023-06-26`), the smallest sherpa-onnx
+/// model whose offline output carries per-token timestamps.
+/// Whisper ONNX is deliberately NOT the default: sherpa-onnx hardcodes
+/// `no_timestamps` for its Whisper decoder, so it can only ever return
+/// text — never the word timing this app is built on.
+pub const SHERPA_MODEL_TARBALL: &str = "sherpa-onnx-zipformer-en-2023-06-26.tar.bz2";
+
+/// (encoder, decoder, joiner, tokens) for the transducer model.
+pub fn sherpa_model_files(dir: &Path) -> (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>, Option<PathBuf>) {
     (
-        find_model(dir, &["tiny.en-encoder.int8.onnx", "tiny.en-encoder.onnx"]),
-        find_model(dir, &["tiny.en-decoder.int8.onnx", "tiny.en-decoder.onnx"]),
-        find_model(dir, &["tiny.en-tokens.txt"]),
+        find_model(dir, &["encoder-epoch-99-avg-1.int8.onnx", "encoder-epoch-99-avg-1.onnx"]),
+        find_model(dir, &["decoder-epoch-99-avg-1.int8.onnx", "decoder-epoch-99-avg-1.onnx"]),
+        find_model(dir, &["joiner-epoch-99-avg-1.int8.onnx", "joiner-epoch-99-avg-1.onnx"]),
+        find_model(dir, &["tokens.txt"]),
     )
 }
 
 pub fn missing_sherpa_models(dir: &Path) -> Vec<&'static str> {
-    let (e, d, t) = sherpa_model_files(dir);
+    let (e, d, j, t) = sherpa_model_files(dir);
     let mut missing = Vec::new();
-    if e.is_none() { missing.push("tiny.en-encoder(.int8).onnx"); }
-    if d.is_none() { missing.push("tiny.en-decoder(.int8).onnx"); }
-    if t.is_none() { missing.push("tiny.en-tokens.txt"); }
-    // Silero VAD ships alongside the recognizer models.
-    if find_model(dir, &["silero_vad.onnx"]).is_none() { missing.push("silero_vad.onnx"); }
+    if e.is_none() { missing.push("encoder-epoch-99-avg-1(.int8).onnx"); }
+    if d.is_none() { missing.push("decoder-epoch-99-avg-1(.int8).onnx"); }
+    if j.is_none() { missing.push("joiner-epoch-99-avg-1(.int8).onnx"); }
+    if t.is_none() { missing.push("tokens.txt"); }
     missing
 }
 
@@ -253,9 +263,9 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// sherpa-onnx native engine (the default): Silero VAD +
-/// Whisper ONNX + token-to-word aggregation, no Python, no
-/// whisper.cpp CLI and no hand-picked `.bin` model path in the UI.
+/// sherpa-onnx native engine (the default): Zipformer transducer +
+/// token-to-word aggregation, no Python, no whisper.cpp CLI and no
+/// hand-picked `.bin` model path in the UI.
 /// Runs the `sherpa-onnx-offline` binary from PATH (or
 /// `SHERPA_ONNX_BIN`) against models auto-detected in
 /// [`sherpa_models_dir`]; model argument is ignored.
@@ -280,9 +290,10 @@ impl Transcriber for SherpaOnnxTranscriber {
         if !missing.is_empty() {
             return crate::msg(format!(
                 "sherpa-onnx models are not installed in {} (missing: {}). \
-                 Download sherpa-onnx-whisper-tiny.en.tar.bz2 and silero_vad.onnx into that folder, then try again.",
+                 Download {} (from the sherpa-onnx asr-models release) into that folder, then try again.",
                 self.models_dir.display(),
-                missing.join(", ")
+                missing.join(", "),
+                SHERPA_MODEL_TARBALL,
             ));
         }
         let binary = self
@@ -308,7 +319,7 @@ impl Transcriber for SherpaOnnxTranscriber {
                 )
             }
         };
-        let (encoder, decoder, tokens) = sherpa_model_files(&self.models_dir);
+        let (encoder, decoder, joiner, tokens) = sherpa_model_files(&self.models_dir);
 
         // sherpa-onnx's wave-reader strictly expects a 16-bit PCM RIFF .wav file.
         // Convert any .m4a, .mp3, .ogg, or non-compliant .wav to a 16kHz mono WAV via ffmpeg.
@@ -334,8 +345,9 @@ impl Transcriber for SherpaOnnxTranscriber {
         };
 
         let out = Command::new(&binary)
-            .arg(format!("--whisper-encoder={}", encoder.unwrap().display()))
-            .arg(format!("--whisper-decoder={}", decoder.unwrap().display()))
+            .arg(format!("--encoder={}", encoder.unwrap().display()))
+            .arg(format!("--decoder={}", decoder.unwrap().display()))
+            .arg(format!("--joiner={}", joiner.unwrap().display()))
             .arg(format!("--tokens={}", tokens.unwrap().display()))
             .arg(&wav_path)
             .output();
@@ -389,6 +401,16 @@ mod tests {
         assert_eq!(w[0].text, "Internal");
         assert_eq!((w[0].start, w[0].end), (0.0, 0.6));
         assert_eq!(w[1].text, "drowning");
+        // Transducer-style sentencepiece boundaries ("▁" starts a word).
+        let z = "{\"text\":\"HELLO WORLD\",\"tokens\":[\"▁HELLO\",\"▁WORLD\"],\"timestamps\":[1.0,1.8]}";
+        let w = parse_sherpa_json(z).unwrap();
+        assert_eq!(w.len(), 2);
+        assert_eq!(w[0].text, "HELLO");
+        assert_eq!((w[0].start, w[0].end), (1.0, 1.8));
+        let frag = "{\"text\":\"INTERNAL\",\"tokens\":[\"▁INTER\",\"NAL\"],\"timestamps\":[2.0,2.3]}";
+        let w = parse_sherpa_json(frag).unwrap();
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].text, "INTERNAL");
     }
 
     #[test]
@@ -419,10 +441,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let missing = missing_sherpa_models(d.path());
         assert_eq!(missing.len(), 4);
-        assert!(missing.iter().any(|m| m.contains("silero_vad")));
+        assert!(missing.iter().any(|m| m.contains("joiner")), "{missing:?}");
         let engine = SherpaOnnxTranscriber { binary: None, models_dir: d.path().to_path_buf() };
         let err = engine.transcribe(Path::new("x.mp3"), Path::new("")).unwrap_err().to_string();
         assert!(err.contains("missing:"), "{err}");
+        assert!(err.contains(SHERPA_MODEL_TARBALL), "{err}");
     }
 }
 
