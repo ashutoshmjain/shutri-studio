@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use shutri_core::{bundle, channels, episodes, git, ingest, jobs::Jobs, nostr, plan, project, transcribe};
+use shutri_core::{bundle, channels, editor, episodes, git, ingest, jobs::Jobs, nostr, plan, project, syndication, transcribe};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -60,12 +60,24 @@ fn upload_audio(path: String, episode: u32, source: String) -> CmdResult<String>
         .map_err(|e| e.to_string())
 }
 
+/// Transcribe with sherpa-onnx by default (word-level timestamps,
+/// models auto-detected — no paths asked in the UI). `engine =
+/// "whisper"` is the legacy whisper.cpp override from Advanced.
 #[tauri::command]
-fn transcribe_episode(path: String, episode: u32, audio_file: String, binary: String, model: String) -> CmdResult<serde_json::Value> {
+fn transcribe_episode(path: String, episode: u32, audio_file: String, engine: Option<String>, binary: Option<String>, model: Option<String>) -> CmdResult<serde_json::Value> {
     use shutri_core::transcribe::Transcriber;
     let audio = bundle::episode_dir(&pb(&path), episode).join("audio").join(&audio_file);
-    let engine = transcribe::WhisperCpp { binary: if binary.trim().is_empty() { "whisper-cli".into() } else { binary } };
-    let words = engine.transcribe(&audio, &pb(&model)).map_err(|e| e.to_string())?;
+    let binary = binary.unwrap_or_default();
+    let words = if engine.as_deref() == Some("whisper") {
+        let engine = transcribe::WhisperCpp { binary: if binary.trim().is_empty() { "whisper-cli".into() } else { binary } };
+        engine.transcribe(&audio, &pb(&model.unwrap_or_default())).map_err(|e| e.to_string())?
+    } else {
+        let engine = transcribe::SherpaOnnxTranscriber {
+            binary: if binary.trim().is_empty() { None } else { Some(binary) },
+            ..Default::default()
+        };
+        engine.transcribe(&audio, &pb("")).map_err(|e| e.to_string())?
+    };
     let n = transcribe::save_transcription(&pb(&path), episode, &words).map_err(|e| e.to_string())?;
     let text = words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
     Ok(serde_json::json!({"words": n, "text": text}))
@@ -82,15 +94,27 @@ fn plan_from_episode(path: String, episode: u32, target_secs: f64) -> CmdResult<
     Ok(p)
 }
 
+/// Ledger Edit: open in the user's editor (preference first, then
+/// gvim -> VS Code -> nvim -> vim -> Notepad, as in deepDive).
 #[tauri::command]
-fn open_episode_file(path: String, file_name: String) -> CmdResult<String> {
+fn open_episode_file(path: String, file_name: String, editor_pref: Option<String>) -> CmdResult<String> {
     if file_name.contains(['/', '\\']) || !file_name.ends_with(".md") {
         return Err("episode file must be a .md file name inside src/".into());
     }
     let full = pb(&path).join("src").join(&file_name);
-    if !full.exists() { return Err(format!("{} does not exist", full.display())); }
-    open_in_browser(&full.to_string_lossy());
-    Ok(format!("Opened {} in your default editor/viewer.", full.display()))
+    let used = editor::open_in_editor(&full, editor_pref.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
+    Ok(format!("Opened {} in {used}.", full.display()))
+}
+
+#[tauri::command]
+fn lock_episode(path: String, episode: u32) -> CmdResult<episodes::Episode> {
+    episodes::lock_episode(&pb(&path), episode).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sync_video_carousel(path: String, episode: u32) -> CmdResult<usize> {
+    let s = syndication::load_syndication(&pb(&path));
+    syndication::sync_video_carousel(&pb(&path), episode, &s).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -336,6 +360,8 @@ fn main() {
             ingest_markdown,
             delete_episode,
             open_episode_file,
+            lock_episode,
+            sync_video_carousel,
             upload_audio,
             transcribe_episode,
             plan_from_episode,

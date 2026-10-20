@@ -15,7 +15,7 @@ export interface Episode {
   slug: string;
   title: string;
   path: string;
-  stage: "mempool" | "template";
+  stage: "mempool" | "template" | "chain";
   has_clips: boolean;
 }
 export type Segment =
@@ -155,7 +155,14 @@ async function demo(cmd: string, a: Record<string, unknown>): Promise<unknown> {
       return ep;
     }
     case "open_episode_file":
-      return "Demo: would open the file in your editor.";
+      return `Demo: would open the file in ${String(a.editorPref ?? "gvim")}.`;
+    case "lock_episode": {
+      const n = Number(a.episode);
+      demoEpisodes = demoEpisodes.map((e) => (e.number === n ? { ...e, stage: "chain" as const } : e));
+      return demoEpisodes.find((e) => e.number === n);
+    }
+    case "sync_video_carousel":
+      return 0;
     case "upload_audio":
       return "demo/episodes/1/audio/demo.mp3";
     case "transcribe_episode":
@@ -241,12 +248,15 @@ export const api = {
     call<string>("delete_episode", { path, fileName }),
   ingestMarkdown: (path: string, source: string) =>
     call<Episode>("ingest_markdown", { path, source }),
-  openEpisodeFile: (path: string, fileName: string) =>
-    call<string>("open_episode_file", { path, fileName }),
+  openEpisodeFile: (path: string, fileName: string, editorPref: string) =>
+    call<string>("open_episode_file", { path, fileName, editorPref }),
+  lockEpisode: (path: string, episode: number) => call<Episode>("lock_episode", { path, episode }),
+  syncVideoCarousel: (path: string, episode: number) =>
+    call<number>("sync_video_carousel", { path, episode }),
   uploadAudio: (path: string, episode: number, source: string) =>
     call<string>("upload_audio", { path, episode, source }),
-  transcribeEpisode: (path: string, episode: number, audioFile: string, binary: string, model: string) =>
-    call<{ words: number; text: string }>("transcribe_episode", { path, episode, audioFile, binary, model }),
+  transcribeEpisode: (path: string, episode: number, audioFile: string, engine: string, binary: string, model: string) =>
+    call<{ words: number; text: string }>("transcribe_episode", { path, episode, audioFile, engine, binary, model }),
   planFromEpisode: (path: string, episode: number, targetSecs: number) =>
     call<Clip[]>("plan_from_episode", { path, episode, targetSecs }),
   promoteEpisode: (path: string, slug: string) => call<Episode>("promote_episode", { path, slug }),

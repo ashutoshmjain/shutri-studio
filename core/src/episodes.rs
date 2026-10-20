@@ -23,7 +23,12 @@ pub struct Episode {
 pub enum Stage {
     Mempool,
     Template,
+    /// Locked into the chain: sealed, permanent, immutable.
+    Chain,
 }
+
+/// Marker written into a numbered article when it is locked.
+pub const LOCKED_MARKER: &str = "<!-- studio:locked -->";
 
 fn title_of(text: &str, fallback: &str) -> String {
     text.lines()
@@ -66,6 +71,7 @@ pub fn list_episodes(project: &Path) -> Result<Vec<Episode>> {
                 stage: Stage::Mempool,
             });
         } else if let Ok(n) = stem.parse::<u32>() {
+            let locked = text.contains(LOCKED_MARKER);
             out.push(Episode {
                 number: Some(n),
                 slug: stem.clone(),
@@ -76,7 +82,7 @@ pub fn list_episodes(project: &Path) -> Result<Vec<Episode>> {
                     .join("plan.json")
                     .exists(),
                 path: p,
-                stage: Stage::Template,
+                stage: if locked { Stage::Chain } else { Stage::Template },
             });
         }
     }
@@ -120,7 +126,10 @@ pub fn create_draft(project: &Path, slug: &str, title: &str, body: &str) -> Resu
         .ok_or_else(|| CoreError::Msg("draft vanished after create".into()))
 }
 
-/// Mine a mempool draft: assign the next number, rename, update SUMMARY.
+/// Mine a mempool draft into the template: assign the next episode
+/// number, rename, add the donation wallet + audio platform links
+/// (see `syndication`), and update SUMMARY. The video carousel is
+/// NOT added here — it arrives later, once clips exist.
 /// Refuses to touch an episode that already has clips.
 pub fn promote(project: &Path, slug: &str) -> Result<Episode> {
     let eps = list_episodes(project)?;
@@ -141,6 +150,8 @@ pub fn promote(project: &Path, slug: &str) -> Result<Episode> {
     } else {
         text = format!("# {n} : {}\n\n{text}", draft.title);
     }
+    let syndication = crate::syndication::load_syndication(project);
+    let text = crate::syndication::ensure_syndication_and_wallet_blocks(&text, &syndication);
     std::fs::write(&dest, text)?;
     std::fs::remove_file(&draft.path)?;
     sync_summary(project)?;
@@ -148,6 +159,33 @@ pub fn promote(project: &Path, slug: &str) -> Result<Episode> {
         .into_iter()
         .find(|e| e.number == Some(n))
         .ok_or_else(|| CoreError::Msg("episode vanished after promote".into()))
+}
+
+/// Lock a template episode into the chain: seal it in place
+/// (its file and permanent URL do not move), mark it locked, and
+/// list it under `chain` in SUMMARY. Locked episodes are immutable:
+/// deletion is refused. Only template episodes can be locked.
+pub fn lock_episode(project: &Path, number: u32) -> Result<Episode> {
+    let eps = list_episodes(project)?;
+    let ep = eps
+        .iter()
+        .find(|e| e.number == Some(number))
+        .ok_or_else(|| CoreError::Msg(format!("no episode {number}")))?;
+    match ep.stage {
+        Stage::Chain => return crate::msg(format!("episode {number} is already locked in the chain")),
+        Stage::Mempool => return crate::msg("only a mined (template) episode can be locked"),
+        Stage::Template => {}
+    }
+    let mut text = std::fs::read_to_string(&ep.path)?;
+    if !text.contains(LOCKED_MARKER) {
+        text = format!("{}\n{}\n", text.trim_end(), LOCKED_MARKER);
+        std::fs::write(&ep.path, text)?;
+    }
+    sync_summary(project)?;
+    list_episodes(project)?
+        .into_iter()
+        .find(|e| e.number == Some(number))
+        .ok_or_else(|| CoreError::Msg("episode vanished after lock".into()))
 }
 
 /// Regenerate the managed ledger block of SUMMARY.md from disk.
@@ -174,7 +212,7 @@ pub fn sync_summary(project: &Path) -> Result<()> {
         block.push_str(&format!("    - [{}](_{}.md)\n", e.title, e.slug));
     }
     block.push_str("- [template](template.md)\n");
-    for e in eps.iter().filter(|e| e.number.is_some()) {
+    for e in eps.iter().filter(|e| e.stage == Stage::Template) {
         block.push_str(&format!(
             "    - [{} : {}]({}.md)\n",
             e.number.unwrap(),
@@ -183,6 +221,14 @@ pub fn sync_summary(project: &Path) -> Result<()> {
         ));
     }
     block.push_str("- [chain](chain.md)\n");
+    for e in eps.iter().filter(|e| e.stage == Stage::Chain) {
+        block.push_str(&format!(
+            "    - [{} : {}]({}.md)\n",
+            e.number.unwrap(),
+            e.title,
+            e.number.unwrap()
+        ));
+    }
     block.push_str("<!-- /studio:episodes -->\n");
     let mut out = format!("{head}\n\n{block}");
     if !tail.is_empty() {
@@ -217,6 +263,34 @@ mod tests {
         assert!(summary.contains("    - [1 : Quantum Memory](1.md)"), "{summary}");
         assert!(summary.contains("- [template](template.md)"), "{summary}");
         assert!(!summary.contains("_quantum-memory.md"), "{summary}");
+    }
+
+    #[test]
+    fn mine_adds_wallet_and_audio_links_but_no_carousel() {
+        let d = proj();
+        create_draft(d.path(), "topic", "Topic", "Body.\n\n## Works Cited\n\n[^1]: x").unwrap();
+        let ep = promote(d.path(), "topic").unwrap();
+        assert_eq!(ep.number, Some(1));
+        assert_eq!(ep.stage, Stage::Template);
+        let md = std::fs::read_to_string(d.path().join("src/1.md")).unwrap();
+        assert!(md.contains("lightning-widget"), "{md}");
+        assert!(md.contains("Spotify") && md.contains("Fountain.fm"), "{md}");
+        assert!(!md.contains("VIDEO_STRIP"), "carousel waits for clips: {md}");
+    }
+
+    #[test]
+    fn lock_moves_template_to_chain_and_seals_it() {
+        let d = proj();
+        create_draft(d.path(), "topic", "Topic", "body").unwrap();
+        let ep = promote(d.path(), "topic").unwrap();
+        let n = ep.number.unwrap();
+        let locked = lock_episode(d.path(), n).unwrap();
+        assert_eq!(locked.stage, Stage::Chain);
+        let summary = std::fs::read_to_string(d.path().join("src/SUMMARY.md")).unwrap();
+        let chain_at = summary.find("- [chain](chain.md)").unwrap();
+        assert!(summary[chain_at..].contains(&format!("({n}.md)")), "{summary}");
+        assert!(lock_episode(d.path(), n).is_err(), "re-lock refused");
+        assert!(delete_episode(d.path(), &format!("{n}.md")).is_err(), "chain is immutable");
     }
 
     #[test]
@@ -271,6 +345,9 @@ pub fn delete_episode(project: &Path, file_name: &str) -> Result<String> {
         .iter()
         .find(|e| e.path.file_name().map(|n| n.to_string_lossy() == file_name).unwrap_or(false))
         .ok_or_else(|| crate::CoreError::Msg(format!("no such episode file {file_name}")))?;
+    if ep.stage == Stage::Chain {
+        return crate::msg("this episode is locked in the chain — sealed chain content is immutable and cannot be deleted.");
+    }
     if ep.has_clips {
         return crate::msg("this episode already has a clip plan/bundle — refusing to delete it and orphan episodes/<N>/. Remove the bundle first if you really mean it.");
     }

@@ -45,6 +45,30 @@ MyResearch/
 
 The episode number is the master key across article, bundle and posts.
 
+## Episode lifecycle
+
+- **Mine** (mempool → template): assigns the next episode number,
+  renames `_<slug>.md` to `<N>.md`, and adds the donation wallet
+  (Twentyuno Lightning widget) plus the Spotify / Apple Podcasts /
+  Fountain audio links directly above Works Cited. Platform defaults
+  match deepDive and can be overridden per project in
+  `.studio/syndication.json`. The video carousel is *not* added at
+  mine time.
+- **Sync video carousel** (Reels tab, once clips exist): rebuilds the
+  `VIDEO_STRIP` carousel and the TikTok / Instagram / YouTube links in
+  `src/<N>.md` from the `.mp4` files actually in `episodes/<N>/clips/`.
+  With no clips it is a no-op.
+- **Lock** (template → chain): seals a finished episode in place —
+  same file, same permanent URL — lists it under `chain` in
+  `SUMMARY.md`, and makes it immutable (deletion is refused).
+
+Ledger **Edit** opens the article in your chosen editor (gVim by
+default, then VS Code, nvim, vim, Notepad — the deepDive cockpit's
+fallback chain). Transcription defaults to sherpa-onnx with
+word-level timestamps and auto-detected models
+(`%LOCALAPPDATA%\ShutriStudio\models` on Windows); whisper.cpp
+remains only as an Advanced override.
+
 ## Run
 
 ```sh

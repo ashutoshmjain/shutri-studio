@@ -79,7 +79,8 @@ if __name__ == '__main__':
   const HELP: Record<string, string> = {
     build: "Build mdBook turns your src/ Markdown into a static website in the book/ folder (HTML, search index, KaTeX-rendered equations). Nothing goes online. It is the same output that will be published when you push. Rebuild after editing any draft or SUMMARY.md.",
     preview: "Preview starts mdbook serve on http://127.0.0.1:3000 and opens it in your browser — your book exactly as readers will see it, served locally. It rebuilds itself when files change. Stop it when done; it only runs while this app keeps it running.",
-    mine: "Mine & lock assigns the next episode number, renames _draft.md to <N>.md, and rewrites SUMMARY.md. Do this only when the podcast audio is final: Spotify needs this episode's permanent URL, and a numbered episode is never renumbered.",
+    mine: "Mine moves a draft from the mempool to the template: it assigns the next episode number, renames _draft.md to <N>.md, adds the donation wallet and the Spotify / Apple / Fountain audio links above Works Cited, and rewrites SUMMARY.md. Do this only when the podcast audio is final: Spotify needs this episode's permanent URL, and a numbered episode is never renumbered. The video carousel is not added now — it arrives when clips exist (Sync video carousel in Reels).",
+    lock: "Lock moves a mined episode from the template into the chain: the file and its permanent URL stay exactly where they are, the episode is marked locked in SUMMARY.md under chain, and it becomes immutable — it can no longer be deleted. Lock only when the episode is truly finished.",
     extract: "Extract reads the raw_markdown string out of your LLM's Python payload and writes it as a mempool draft (_slug.md), byte-for-byte, so $...$ equations survive. The title and slug come from the paper's # H1 line.",
     publish: "Publish stages src/, episodes/ and book.toml in your project repo, commits with an automatic message, and pushes to its configured remote. It uses your own Git credentials; the app stores no tokens.",
   };
@@ -175,7 +176,7 @@ if __name__ == '__main__':
       view = "article";
       await refresh();
       say(`In mempool: "${ep.title}" as _${ep.slug}.md — KaTeX preserved.`,
-        "What just happened: Studio pulled the raw_markdown out of your Python file and stored it in src/ as a mempool draft, and SUMMARY.md now lists it. It has no permanent URL yet. Read it in the Ledger, make the NotebookLM audio, and Mine & lock only when that audio is final.");
+        "What just happened: Studio pulled the raw_markdown out of your Python file and stored it in src/ as a mempool draft, and SUMMARY.md now lists it. It has no permanent URL yet. Read it in the Ledger, make the NotebookLM audio, and Mine only when that audio is final.");
     }
   }
   let mdPath = "";
@@ -190,7 +191,7 @@ if __name__ == '__main__':
   }
   async function uploadMarkdown() {
     const ep = await run("Uploading Markdown into the mempool", () => api.ingestMarkdown(projectPath, mdPath));
-    if (ep) { mdPath = ""; await refresh(); say(`Uploaded "${ep.title}" into the mempool as _${ep.slug}.md.`, "The file was copied into src/ and listed in SUMMARY.md — the original stays where it was. Read it in the Ledger; edit it there with the Edit button (opens your Notepad/gVim) at any time."); }
+    if (ep) { mdPath = ""; await refresh(); say(`Uploaded "${ep.title}" into the mempool as _${ep.slug}.md.`, "The file was copied into src/ and listed in SUMMARY.md — the original stays where it was. Read it in the Ledger; edit it there with the Edit button (opens it in your chosen editor — gVim by default) at any time."); }
   }
   async function openProject() {
     const p = await run("Opening project", () => api.inspectProject(projectPath));
@@ -205,12 +206,24 @@ if __name__ == '__main__':
     if (ep) { slug = ""; title = ""; body = ""; await refresh(); notice = `Draft _${ep.slug}.md is in the mempool — see the Ledger.`; }
   }
   async function promote(ep: Episode) {
-    const mined = await run("Mining episode & locking number", () => api.promoteEpisode(projectPath, ep.slug));
-    if (mined) { await refresh(); say(`Mined as episode ${mined.number} — permanent URL assigned.`, "What just happened: the draft was renamed to " + mined.number + ".md, its title was numbered, and SUMMARY.md moved it from mempool to template. This is the URL to paste into your Spotify episode description. It will never be renumbered, even if you edit the text."); }
+    const mined = await run("Mining episode into the template", () => api.promoteEpisode(projectPath, ep.slug));
+    if (mined) { await refresh(); say(`Mined as episode ${mined.number} — permanent URL assigned.`, "What just happened: the draft was renamed to " + mined.number + ".md, its title was numbered, the donation wallet and Spotify / Apple / Fountain links were added above Works Cited, and SUMMARY.md moved it from mempool to template. This is the URL to paste into your Spotify episode description. It will never be renumbered, even if you edit the text. Lock it into the chain only when it is completely finished."); }
+  }
+  async function lock(ep: Episode) {
+    if (ep.number === null) return;
+    if (!window.confirm(`Lock episode ${ep.number} ("${ep.title}") into the chain?\n\nIts file and permanent URL stay put, but it becomes immutable: it can no longer be deleted. Do this only when the episode is completely finished.`)) return;
+    const locked = await run("Locking episode into the chain", () => api.lockEpisode(projectPath, ep.number!));
+    if (locked) { await refresh(); say(`Episode ${locked.number} is locked in the chain.`, "What just happened: SUMMARY.md now lists this episode under chain instead of template, and the article carries the locked marker. It is sealed — Studio will refuse to delete it."); }
+  }
+  let editorPref = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-editor") ?? "gvim") : "gvim";
+  function setEditorPref(v: string) {
+    editorPref = v;
+    try { localStorage.setItem("studio-editor", v); } catch {}
+    notice = v === "default" ? "Edit will use the first editor found: gVim, VS Code, nvim, vim, then Notepad." : `Edit will open files in ${v} first (falling back to gVim, VS Code, nvim, vim, Notepad).`;
   }
   function fileNameOf(ep: Episode) { return ep.path.replace(/\\/g, "/").split("/").pop() ?? ""; }
   async function editEpisode(ep: Episode) {
-    const out = await run("Opening file in your editor", () => api.openEpisodeFile(projectPath, fileNameOf(ep)));
+    const out = await run("Opening file in your editor", () => api.openEpisodeFile(projectPath, fileNameOf(ep), editorPref));
     if (out) say(out, "Edit and save in your editor, then Read again here or Build to refresh the book. Studio re-reads the file from disk every time — there is no second copy to sync.");
   }
   async function removeEpisode(ep: Episode) {
@@ -241,7 +254,10 @@ if __name__ == '__main__':
   }
   let audioPath = "";
   let uploadedAudioName = "";
-  let whisperBinary = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-whisper-bin") ?? "whisper-cli") : "whisper-cli";
+  // sherpa-onnx is the default engine; whisper.cpp survives only as
+  // an Advanced override. No binary/model paths in the main flow.
+  let transcribeEngine = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-transcribe-engine") ?? "sherpa") : "sherpa";
+  let engineBinary = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-engine-bin") ?? "") : "";
   let whisperModel = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-whisper-model") ?? "") : "";
   async function browseAudio() {
     error = ""; notice = "";
@@ -265,17 +281,25 @@ if __name__ == '__main__':
     if (picked) { whisperModel = picked; try { localStorage.setItem("studio-whisper-model", picked); } catch {} notice = `Whisper model set: ${picked}`; }
   }
   async function doTranscribe() {
-    try { localStorage.setItem("studio-whisper-bin", whisperBinary); localStorage.setItem("studio-whisper-model", whisperModel); } catch {}
-    const out = await run("Transcribing audio with Whisper (word-level — can take minutes)", () => api.transcribeEpisode(projectPath, planEpisode, uploadedAudioName, whisperBinary, whisperModel));
+    try { localStorage.setItem("studio-transcribe-engine", transcribeEngine); localStorage.setItem("studio-engine-bin", engineBinary); localStorage.setItem("studio-whisper-model", whisperModel); } catch {}
+    const out = await run("Transcribing episode (word-level — can take minutes)", () => api.transcribeEpisode(projectPath, planEpisode, uploadedAudioName, transcribeEngine, engineBinary, whisperModel));
     if (out) {
       transcript = out.text;
       say(`Transcribed ${out.words} words with timestamps for episode ${planEpisode}.`,
         "What you have now: episodes/" + planEpisode + "/transcription.json (every word timed) and narrative.md (the readable conversation). The transcript is shown below. Set the target seconds and click Break into clips (real timing) — boundaries will snap to real word ends, then edit each segment and Save plan.json.");
     }
   }
+  async function doSyncCarousel() {
+    const n = await run("Syncing video carousel into the episode article", () => api.syncVideoCarousel(projectPath, planEpisode));
+    if (n !== null) {
+      await refresh();
+      if (n > 0) say(`Video carousel updated: ${n} clip(s) now embedded in episode ${planEpisode}.`, "What just happened: the VIDEO_STRIP carousel and the TikTok / Instagram / YouTube links in src/" + planEpisode + ".md were rebuilt from the .mp4 files actually present in episodes/" + planEpisode + "/clips/. Re-run this whenever new clips land; it replaces the carousel, never duplicates it.");
+      else say(`No clips found for episode ${planEpisode} yet — nothing embedded.`, "The carousel is only added once clip videos exist in episodes/" + planEpisode + "/clips/. Build the clips first, then sync again.");
+    }
+  }
   async function doPlanReal() {
     const p = await run("Breaking episode into clips from real word timing", () => api.planFromEpisode(projectPath, planEpisode, targetSecs));
-    if (p) { plan = p; say(`${p.length} clips planned for episode ${planEpisode} and saved to plan.json.`, "Boundaries snapped to sentence ends using the Whisper word timestamps — not estimates. Now the creative edit: retitle clips, nudge speech start/end seconds, add music segments with crossfades, remove what drags. Save plan.json after editing."); }
+    if (p) { plan = p; say(`${p.length} clips planned for episode ${planEpisode} and saved to plan.json.`, "Boundaries snapped to sentence ends using the real word timestamps — not estimates. Now the creative edit: retitle clips, nudge speech start/end seconds, add music segments with crossfades, remove what drags. Save plan.json after editing."); }
   }
   async function makePlan() {
     const p = await run("Breaking transcript into clips", () => api.planFromTranscript(transcript, targetSecs));
@@ -392,7 +416,7 @@ if __name__ == '__main__':
           <li><strong>Package</strong> the session with the Master Packaging Prompt (right) into a self-extracting Python script.</li>
           <li><strong>Publish as-is</strong> into the mempool (<span class="mono">_slug.md</span>) and build the book. No permanent URL yet.</li>
           <li><strong>Audio</strong> in NotebookLM, then your manual Audacity edit for the podcast. Studio receives the original NotebookLM audio.</li>
-          <li><strong>Mine &amp; lock</strong> when the audio is final: the draft becomes a numbered episode — the permanent URL the Spotify description will link to.</li>
+          <li><strong>Mine</strong> when the audio is final: the draft becomes a numbered episode in the template — the permanent URL the Spotify description will link to — with the donation wallet and audio platform links added. <strong>Lock</strong> it into the chain only when it is completely finished; locked episodes are immutable.</li>
           <li><strong>Transcribe</strong> the audio word-by-word; the transcript becomes the Narrative, the readable version for LinkedIn, Nostr and later Substack.</li>
           <li><strong>Clip</strong> the Narrative: edit speech and music segments, crossfades and volumes, intro page and outro questions, then infographics via Mosaic.</li>
           <li><strong>Distribute</strong> finished clips from GitHub, and combine them into the long-form YouTube video (and a combined audio to listen back and check).</li>
@@ -453,6 +477,17 @@ if __name__ == '__main__':
 
       <section class="panel">
         <h2>Ledger</h2>
+        <div class="row">
+          <div>
+            <label for="editor-pref">Edit opens in</label>
+            <select id="editor-pref" value={editorPref} onchange={(e) => setEditorPref((e.target as HTMLSelectElement).value)}>
+              <option value="gvim">gVim</option>
+              <option value="notepad">Notepad</option>
+              <option value="code">VS Code</option>
+              <option value="default">First found (gVim → VS Code → nvim → vim → Notepad)</option>
+            </select>
+          </div>
+        </div>
         {#if episodes.length === 0}<p class="small">Open or create a project to see its mempool and mined episodes.</p>{/if}
         {#each episodes as ep}
           <article class="episode">
@@ -462,11 +497,18 @@ if __name__ == '__main__':
             </div>
             <div class="row">
               <button disabled={busy} title="Read this episode rendered, with equations" onclick={() => openEpisode(ep)}>Read</button>
-              <button disabled={busy} title="Open the .md file in your default editor (Notepad, gVim, …)" onclick={() => editEpisode(ep)}>Edit</button>
-              <button class="danger" disabled={busy} title="Delete this article (mempool and template only — sealed chain content is immutable)" onclick={() => removeEpisode(ep)}>Delete</button>
+              {#if ep.stage !== "chain"}
+                <button disabled={busy} title={`Open the .md file in ${editorPref === "default" ? "your editor (gVim first)" : editorPref}`} onclick={() => editEpisode(ep)}>Edit</button>
+                <button class="danger" disabled={busy} title="Delete this article (mempool and template only — sealed chain content is immutable)" onclick={() => removeEpisode(ep)}>Delete</button>
+              {:else}
+                <span class="small">locked in chain · immutable</span>
+              {/if}
               {#if ep.number === null}
-                <button class="accent" disabled={busy} onclick={() => promote(ep)}>Mine &amp; lock</button>
-                <button class="ibtn" title="What does Mine & lock do?" onclick={() => showHelp("mine")}>i</button>
+                <button class="accent" disabled={busy} title="Mine: mempool → template (assign number, add wallet + audio links)" onclick={() => promote(ep)}>Mine</button>
+                <button class="ibtn" title="What does Mine do?" onclick={() => showHelp("mine")}>i</button>
+              {:else if ep.stage === "template"}
+                <button class="accent" disabled={busy} title="Lock: template → chain (seal it, immutable)" onclick={() => lock(ep)}>Lock</button>
+                <button class="ibtn" title="What does Lock do?" onclick={() => showHelp("lock")}>i</button>
               {/if}
             </div>
           </article>
@@ -506,14 +548,14 @@ if __name__ == '__main__':
       </section>
     </div>
 
-      <p class="small reader-hint">Tip: click <strong>Read</strong> on any Ledger entry — it opens at the top of this tab, rendered with equations, before you decide to Mine &amp; lock it.</p>
+      <p class="small reader-hint">Tip: click <strong>Read</strong> on any Ledger entry — it opens at the top of this tab, rendered with equations, before you decide to Mine it.</p>
   {/if}
 
   {#if view === "reels"}
     <div class="grid">
       <section class="panel">
         <h2>Episode audio → transcription</h2>
-        <p class="small">Upload the <strong>original NotebookLM audio</strong> for a mined episode (your Audacity podcast edit stays outside Studio). Whisper turns it into word-level timing — the basis of the Narrative and of every clip boundary.</p>
+        <p class="small">Upload the <strong>original NotebookLM audio</strong> for a mined episode (your Audacity podcast edit stays outside Studio). Transcription (sherpa-onnx, word-level) turns it into word timing — the basis of the Narrative and of every clip boundary.</p>
         <div class="row">
           <div><label for="pe">Episode number</label><input id="pe" type="number" min="1" bind:value={planEpisode} /></div>
           <div><label for="tg">Target seconds per clip (under 180 for Shorts)</label><input id="tg" type="number" min="10" max="180" bind:value={targetSecs} /></div>
@@ -526,18 +568,29 @@ if __name__ == '__main__':
         <div class="row">
           <button class="primary" disabled={busy || !projectPath || !audioPath} title={!projectPath ? "Open a project first" : !audioPath ? "Choose an audio file first" : "Copy the audio into episodes/<N>/audio/"} onclick={doUploadAudio}>Upload audio into episode</button>
         </div>
-        <label for="wb">Whisper program (whisper.cpp)</label>
-        <input id="wb" bind:value={whisperBinary} placeholder="whisper-cli" />
-        <label>Whisper model file (.bin)</label>
-        <div class="pathrow">
-          <input bind:value={whisperModel} placeholder="C:\whisper\ggml-large-v3.bin" aria-label="Whisper model file" />
-          <button disabled={busy} onclick={browseModel}>Browse model…</button>
-        </div>
         <div class="row">
-          <button class="primary" disabled={busy || !projectPath || !uploadedAudioName} title={!uploadedAudioName ? "Upload the audio first" : "Run whisper-cli and save transcription.json + narrative.md"} onclick={doTranscribe}>Transcribe (Whisper)</button>
+          <button class="primary" disabled={busy || !projectPath || !uploadedAudioName} title={!uploadedAudioName ? "Upload the audio first" : "Transcribe with sherpa-onnx and save transcription.json + narrative.md"} onclick={doTranscribe}>Transcribe Episode</button>
           <button class="accent" disabled={busy || !projectPath} title="Plan clips from the saved transcription.json (real word timing) and save plan.json" onclick={doPlanReal}>Break into clips (real timing)</button>
+          <button disabled={busy || !projectPath} title="Embed the video carousel + TikTok/Instagram/YouTube links for clips already built" onclick={doSyncCarousel}>Sync video carousel</button>
         </div>
-        {#if !uploadedAudioName}<p class="small">Transcribe enables after the audio upload. No whisper-cli yet? Install whisper.cpp, download a ggml model (.bin), and point both fields at them — transcription runs fully offline on your machine.</p>{/if}
+        {#if !uploadedAudioName}<p class="small">Transcribe enables after the audio upload. It runs sherpa-onnx on your machine with word-level timestamps; models are found automatically in your ShutriStudio models folder — no binary or model paths to pick. Engine overrides live under Advanced.</p>{/if}
+        <details>
+          <summary class="small">Advanced / Developer — transcription engine override</summary>
+          <label for="engine">Engine</label>
+          <select id="engine" bind:value={transcribeEngine}>
+            <option value="sherpa">sherpa-onnx (default, word-level)</option>
+            <option value="whisper">whisper.cpp (legacy)</option>
+          </select>
+          <label for="wb">Engine program (optional override)</label>
+          <input id="wb" bind:value={engineBinary} placeholder={transcribeEngine === "whisper" ? "whisper-cli" : "sherpa-onnx-offline"} />
+          {#if transcribeEngine === "whisper"}
+            <label>Whisper model file (.bin)</label>
+            <div class="pathrow">
+              <input bind:value={whisperModel} placeholder="C:\whisper\ggml-large-v3.bin" aria-label="Whisper model file" />
+              <button disabled={busy} onclick={browseModel}>Browse model…</button>
+            </div>
+          {/if}
+        </details>
         <h3>…or paste a transcript (estimated timing)</h3>
         <label for="tr">Transcript (conversation)</label>
         <textarea id="tr" class="tall" bind:value={transcript}></textarea>

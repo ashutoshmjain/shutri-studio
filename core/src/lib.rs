@@ -5,6 +5,7 @@
 
 pub mod bundle;
 pub mod channels;
+pub mod editor;
 pub mod episodes;
 pub mod git;
 pub mod ingest;
@@ -14,6 +15,7 @@ pub mod narrative;
 pub mod nostr;
 pub mod plan;
 pub mod project;
+pub mod syndication;
 pub mod transcribe;
 
 use thiserror::Error;
