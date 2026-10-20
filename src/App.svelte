@@ -476,32 +476,33 @@ if __name__ == '__main__':
       </section>
 
       <section class="panel">
-        <h2>Ledger</h2>
-        <div class="row">
-          <div>
+        <div class="ledger-head">
+          <h2>Ledger</h2>
+          <div class="ledger-tools">
             <label for="editor-pref">Edit opens in</label>
             <select id="editor-pref" value={editorPref} onchange={(e) => setEditorPref((e.target as HTMLSelectElement).value)}>
               <option value="gvim">gVim</option>
               <option value="notepad">Notepad</option>
               <option value="code">VS Code</option>
-              <option value="default">First found (gVim → VS Code → nvim → vim → Notepad)</option>
+              <option value="default">First found</option>
             </select>
           </div>
         </div>
         {#if episodes.length === 0}<p class="small">Open or create a project to see its mempool and mined episodes.</p>{/if}
         {#each episodes as ep}
           <article class="episode">
-            <div>
-              <strong>{ep.number ? `#${ep.number} : ` : ""}{ep.title}</strong>
-              <div class="small">{ep.stage}{ep.has_clips ? " · has clips" : ""} · <span class="mono">{ep.path}</span></div>
+            <div class="ep-main">
+              <div class="ep-head">
+                <strong class="ep-title">{ep.number ? `#${ep.number} : ` : ""}{ep.title}</strong>
+                <span class="pill" data-stage={ep.stage}>{ep.stage}</span>
+                {#if ep.has_clips}<span class="pill pill-clips">clips</span>{/if}
+              </div>
+              <div class="ep-meta mono" title={ep.path}>{fileNameOf(ep)}</div>
             </div>
-            <div class="row">
+            <div class="ep-actions">
               <button disabled={busy} title="Read this episode rendered, with equations" onclick={() => openEpisode(ep)}>Read</button>
               {#if ep.stage !== "chain"}
                 <button disabled={busy} title={`Open the .md file in ${editorPref === "default" ? "your editor (gVim first)" : editorPref}`} onclick={() => editEpisode(ep)}>Edit</button>
-                <button class="danger" disabled={busy} title="Delete this article (mempool and template only — sealed chain content is immutable)" onclick={() => removeEpisode(ep)}>Delete</button>
-              {:else}
-                <span class="small">locked in chain · immutable</span>
               {/if}
               {#if ep.number === null}
                 <button class="accent" disabled={busy} title="Mine: mempool → template (assign number, add wallet + audio links)" onclick={() => promote(ep)}>Mine</button>
@@ -509,11 +510,16 @@ if __name__ == '__main__':
               {:else if ep.stage === "template"}
                 <button class="accent" disabled={busy} title="Lock: template → chain (seal it, immutable)" onclick={() => lock(ep)}>Lock</button>
                 <button class="ibtn" title="What does Lock do?" onclick={() => showHelp("lock")}>i</button>
+              {:else}
+                <span class="ep-locked">Locked</span>
+              {/if}
+              {#if ep.stage !== "chain"}
+                <button class="danger" disabled={busy} title="Delete this article (mempool and template only — sealed chain content is immutable)" onclick={() => removeEpisode(ep)}>Delete</button>
               {/if}
             </div>
           </article>
         {/each}
-        <div class="row">
+        <div class="row ledger-foot">
           <button disabled={busy || !projectPath} onclick={build}>Build mdBook (web channel)</button>
           <button class="ibtn" title="What does Build do?" onclick={() => showHelp("build")}>i</button>
           {#if previewOn}
@@ -721,8 +727,35 @@ if __name__ == '__main__':
   @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
   .panel h2 { margin: 0 0 10px; font-size: 19px; }
-  .episode, .clip { border-top: 1px solid var(--line); padding: 10px 0; }
-  .episode { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+  .clip { border-top: 1px solid var(--line); padding: 10px 0; }
+  .ledger-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  .ledger-head h2 { margin: 0; }
+  .ledger-tools { display: flex; align-items: center; gap: 8px; }
+  .ledger-tools label { margin: 0; white-space: nowrap; }
+  .ledger-tools select { width: auto; height: 32px; padding: 0 8px; font-size: 13px; }
+  .episode { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 0; border-top: 1px solid var(--line); }
+  .ep-main { min-width: 0; flex: 1 1 auto; }
+  .ep-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .ep-title { font-size: 15px; line-height: 1.3; overflow-wrap: break-word; }
+  .ep-meta { color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pill { font-size: 11px; font-weight: 600; line-height: 1; padding: 4px 8px; border-radius: 999px; background: var(--wash); color: var(--muted); text-transform: capitalize; flex: none; }
+  .pill[data-stage="mempool"] { background: #fef3c7; color: var(--accent-ink); }
+  .pill[data-stage="template"] { background: #dcfce7; color: var(--good); }
+  .pill[data-stage="chain"] { background: #e7e5e4; color: var(--ink-2); }
+  .pill-clips { background: var(--wash); color: var(--ink-2); }
+  .ep-actions { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+  .ep-actions button { height: 32px; min-height: 32px; padding: 0 12px; margin: 0; font-size: 13px; line-height: 1; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; }
+  .ep-actions .ibtn { width: 32px; height: 32px; min-height: 32px; padding: 0; border-radius: 7px; flex: none; }
+  .ep-actions button.danger { margin-left: 6px; }
+  .ep-locked { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 4px; white-space: nowrap; }
+  .ledger-foot { align-items: center; gap: 6px; margin-top: 8px; }
+  .ledger-foot button { height: 32px; min-height: 32px; padding: 0 12px; margin: 0; font-size: 13px; line-height: 1; border-radius: 7px; display: inline-flex; align-items: center; }
+  .ledger-foot .ibtn { width: 32px; height: 32px; min-height: 32px; padding: 0; border-radius: 7px; }
+  @media (max-width: 640px) {
+    .episode { flex-direction: column; align-items: stretch; gap: 10px; }
+    .ep-actions { justify-content: flex-start; }
+    .ep-actions button.danger { margin-left: 0; }
+  }
   .clip header { display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; }
   .segment { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 6px 0; border-top: 1px dashed var(--line); }
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
