@@ -285,6 +285,14 @@ impl Transcriber for SherpaOnnxTranscriber {
             .or_else(|| std::env::var("SHERPA_ONNX_BIN").ok())
             .map(PathBuf::from)
             .filter(|p| p.is_file())
+            .or_else(|| {
+                let p = self.models_dir.parent()?.join("bin").join("sherpa-onnx-offline.exe");
+                if p.is_file() { Some(p) } else { None }
+            })
+            .or_else(|| {
+                let p = self.models_dir.parent()?.join("bin").join("sherpa-onnx-offline");
+                if p.is_file() { Some(p) } else { None }
+            })
             .or_else(|| find_on_path("sherpa-onnx-offline"));
         let binary = match binary {
             Some(b) => b,
@@ -295,12 +303,39 @@ impl Transcriber for SherpaOnnxTranscriber {
             }
         };
         let (encoder, decoder, tokens) = sherpa_model_files(&self.models_dir);
+
+        // sherpa-onnx's wave-reader strictly expects a 16-bit PCM RIFF .wav file.
+        // Convert any .m4a, .mp3, .ogg, or non-compliant .wav to a 16kHz mono WAV via ffmpeg.
+        let temp_wav = std::env::temp_dir().join(format!("studio-sherpa-{}.wav", std::process::id()));
+        let conv = Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-i",
+                &audio.to_string_lossy(),
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-c:a",
+                "pcm_s16le",
+                &temp_wav.to_string_lossy(),
+            ])
+            .output();
+
+        let wav_path = match conv {
+            Ok(c) if c.status.success() => temp_wav.clone(),
+            _ => audio.to_path_buf(),
+        };
+
         let out = Command::new(&binary)
             .arg(format!("--whisper-encoder={}", encoder.unwrap().display()))
             .arg(format!("--whisper-decoder={}", decoder.unwrap().display()))
             .arg(format!("--tokens={}", tokens.unwrap().display()))
-            .arg(audio)
+            .arg(&wav_path)
             .output();
+
+        let _ = std::fs::remove_file(&temp_wav);
+
         let out = match out {
             Ok(o) => o,
             Err(e) => return crate::msg(format!("could not run {} ({e})", binary.display())),
