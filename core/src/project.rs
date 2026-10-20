@@ -62,7 +62,7 @@ pub fn create(path: &Path, name: &str, template: &Template) -> Result<ProjectInf
     std::fs::create_dir_all(path.join("theme"))?;
     std::fs::write(
         path.join("theme/studio.css"),
-        "/* Shutri Studio: mdBook's automatic section numbers (1., 2.1., 3.1.)\n   duplicate the ledger's own episode numbering — hide them. */\n.chapter-item > a > strong[aria-hidden=\"true\"],\n.chapter-item > div > strong[aria-hidden=\"true\"] { display: none; }\n",
+        "/* Shutri Studio: mdBook's automatic section numbers (1., 2.1., 3.1.)\n   duplicate the ledger's own episode numbering — hide them.\n   (Descendant selector: mdBook nests the number inside extra spans\n   in recent versions, so a strict child selector would miss it.) */\n.chapter-item strong[aria-hidden=\"true\"] { display: none; }\n",
     )?;
     std::fs::write(path.join(".gitignore"), "book/\n.studio/\n")?;
     std::fs::write(
