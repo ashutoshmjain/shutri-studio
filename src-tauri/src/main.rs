@@ -112,6 +112,17 @@ fn lock_episode(path: String, episode: u32) -> CmdResult<episodes::Episode> {
 }
 
 #[tauri::command]
+fn load_syndication(path: String) -> syndication::Syndication {
+    syndication::load_syndication(&pb(&path))
+}
+
+#[tauri::command]
+fn save_syndication(path: String, settings: syndication::Syndication) -> CmdResult<String> {
+    syndication::save_syndication(&pb(&path), &settings).map_err(|e| e.to_string())?;
+    Ok("Settings saved — Mine and Sync carousel will use your wallet and platform links.".into())
+}
+
+#[tauri::command]
 fn sync_video_carousel(path: String, episode: u32) -> CmdResult<usize> {
     let s = syndication::load_syndication(&pb(&path));
     syndication::sync_video_carousel(&pb(&path), episode, &s).map_err(|e| e.to_string())
@@ -361,6 +372,8 @@ fn main() {
             delete_episode,
             open_episode_file,
             lock_episode,
+            load_syndication,
+            save_syndication,
             sync_video_carousel,
             upload_audio,
             transcribe_episode,

@@ -152,9 +152,15 @@ pub fn parse_sherpa_json(json: &str) -> Result<Vec<Word>> {
     if !stamps.is_empty() && stamps.len() != tokens.len() {
         return crate::msg("sherpa-onnx token/timestamp count mismatch");
     }
+    if !stamps.is_empty() && stamps.iter().all(|t| *t == 0.0) {
+        return crate::msg("sherpa-onnx returned no word timestamps (all token timestamps are 0) — re-run transcription; never plan clips from flat zero timing");
+    }
     let mut raw = Vec::new();
     for (i, tok) in tokens.iter().enumerate() {
-        let start = stamps.get(i).copied().unwrap_or(0.0);
+        let start = stamps.get(i).copied().unwrap_or(f64::NAN);
+        if start.is_nan() {
+            return crate::msg("sherpa-onnx returned no word timestamps (tokens without timestamps) — re-run transcription; never plan clips from flat zero timing");
+        }
         let end = stamps.get(i + 1).copied().unwrap_or(start + 0.4);
         raw.push(RawToken {
             text: tok.as_str().unwrap_or("").to_string(),
@@ -386,6 +392,17 @@ mod tests {
     }
 
     #[test]
+    fn sherpa_without_timestamps_fails_loudly_instead_of_one_flat_clip() {
+        let empty = "{\"text\":\"hi there\",\"tokens\":[\" hi\",\" there\"],\"timestamps\":[]}";
+        assert!(parse_sherpa_json(empty).is_err());
+        let zeros = "{\"text\":\"hi there\",\"tokens\":[\" hi\",\" there\"],\"timestamps\":[0.0,0.0]}";
+        assert!(parse_sherpa_json(zeros).is_err());
+        let d = tempfile::tempdir().unwrap();
+        let flat = vec![Word { text: "hi".into(), start: 0.0, end: 0.0 }];
+        assert!(save_transcription(d.path(), 1, &flat).is_err());
+    }
+
+    #[test]
     fn vad_drops_words_in_music_stings() {
         let words = vec![
             Word { text: "sting".into(), start: 0.0, end: 0.4 },
@@ -431,6 +448,12 @@ pub fn copy_audio(project: &Path, episode: u32, source: &Path) -> Result<PathBuf
 pub fn save_transcription(project: &Path, episode: u32, words: &[Word]) -> Result<usize> {
     if words.is_empty() {
         return crate::msg("transcription produced no words");
+    }
+    // A transcription where every word ends at <= 0 has no usable
+    // timing. Saving it would let clip planning silently produce a
+    // single whole-episode clip — refuse instead.
+    if words.iter().all(|w| w.end <= 0.0) {
+        return crate::msg("transcription has no usable word timing (all word ends <= 0) — re-run transcription before planning clips");
     }
     let dir = crate::bundle::episode_dir(project, episode);
     std::fs::create_dir_all(&dir)?;

@@ -44,6 +44,31 @@ impl Default for Syndication {
     }
 }
 
+/// Save per-project settings to `.studio/syndication.json`
+/// (local app state, git-ignored). Trims whitespace; refuses to save
+/// a record whose lightning address and every URL are all empty.
+pub fn save_syndication(project: &Path, s: &Syndication) -> Result<()> {
+    let clean = Syndication {
+        lightning_address: s.lightning_address.trim().to_string(),
+        spotify_url: s.spotify_url.trim().to_string(),
+        apple_podcasts_url: s.apple_podcasts_url.trim().to_string(),
+        fountain_url: s.fountain_url.trim().to_string(),
+        tiktok_url: s.tiktok_url.trim().to_string(),
+        instagram_url: s.instagram_url.trim().to_string(),
+        youtube_url: s.youtube_url.trim().to_string(),
+    };
+    if [&clean.lightning_address, &clean.spotify_url, &clean.apple_podcasts_url,
+        &clean.fountain_url, &clean.tiktok_url, &clean.instagram_url, &clean.youtube_url]
+        .iter().all(|v| v.is_empty())
+    {
+        return crate::msg("settings are empty — enter at least one wallet address or platform URL");
+    }
+    let dir = project.join(".studio");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("syndication.json"), serde_json::to_string_pretty(&clean)?)?;
+    Ok(())
+}
+
 /// Load `.studio/syndication.json` when present, else the defaults.
 pub fn load_syndication(project: &Path) -> Syndication {
     let path = project.join(".studio").join("syndication.json");
@@ -158,6 +183,18 @@ pub fn sync_video_carousel(project: &Path, episode: u32, s: &Syndication) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_save_load_round_trips_and_reject_empty() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = Syndication::default();
+        s.lightning_address = "  me@example.com  ".into();
+        save_syndication(d.path(), &s).unwrap();
+        let loaded = load_syndication(d.path());
+        assert_eq!(loaded.lightning_address, "me@example.com");
+        let empty = Syndication { lightning_address: String::new(), spotify_url: String::new(), apple_podcasts_url: String::new(), fountain_url: String::new(), tiktok_url: String::new(), instagram_url: String::new(), youtube_url: String::new() };
+        assert!(save_syndication(d.path(), &empty).is_err());
+    }
 
     #[test]
     fn wallet_and_audio_links_go_above_works_cited_and_are_idempotent() {

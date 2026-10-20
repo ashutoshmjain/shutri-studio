@@ -3,9 +3,9 @@
   import { marked } from "marked";
   import renderMathInElement from "katex/contrib/auto-render";
   import "katex/dist/katex.min.css";
-  import { api, inTauri, pickFile, pickFolder, pickPayloadFile, type Channel, type Clip, type Episode, type GitStatus, type ProjectInfo } from "./lib/api";
+  import { api, inTauri, pickFile, pickFolder, pickPayloadFile, type Channel, type Clip, type Episode, type GitStatus, type ProjectInfo, type Syndication } from "./lib/api";
 
-  type View = "guide" | "article" | "reels" | "publish" | "identity";
+  type View = "guide" | "article" | "reels" | "publish" | "identity" | "settings";
   let view: View = "guide";
 
   const MASTER_PROMPT = `Objective: Package the complete exhaustive research from this session into a self-extracting Python script without summarizing or pruning.
@@ -83,6 +83,11 @@ if __name__ == '__main__':
     lock: "Lock moves a mined episode from the template into the chain: the file and its permanent URL stay exactly where they are, the episode is marked locked in SUMMARY.md under chain, and it becomes immutable — it can no longer be deleted. Lock only when the episode is truly finished.",
     extract: "Extract reads the raw_markdown string out of your LLM's Python payload and writes it as a mempool draft (_slug.md), byte-for-byte, so $...$ equations survive. The title and slug come from the paper's # H1 line.",
     publish: "Publish stages src/, episodes/ and book.toml in your project repo, commits with an automatic message, and pushes to its configured remote. It uses your own Git credentials; the app stores no tokens.",
+    audio: "Upload audio into episode COPIES your NotebookLM original (mp3/wav/m4a/flac/ogg) into episodes/<N>/audio/ inside the project — it is not pasted into the research article and never goes through the chat. The file can be well over 100 MB; it lives in your project repo and ships with it when you Publish, so keep the original somewhere safe and treat the episode bundle as the heavy part of the project.",
+    transcribe: "Transcribe Episode runs sherpa-onnx on the uploaded audio and writes episodes/<N>/transcription.json (every word timed) plus narrative.md. It fails loudly if the models are missing or the engine was found but returned no word timestamps — a transcription with flat zero timing must never become a clip plan. whisper.cpp stays available only under Advanced / Developer.",
+    clips: "Break into clips (real timing) groups the transcript's sentences into ~target-second clips, snapping boundaries to sentence ends using the saved word timestamps, and writes plan.json. If you only get 1 clip covering the whole episode, the transcription behind it has no usable timing — re-transcribe and check that transcription.json words carry distinct start/end times. Then retitle clips, nudge speech start/end seconds, add music segments with crossfades, remove what drags, and Save plan.json.",
+    carousel: "Sync video carousel rebuilds the VIDEO_STRIP carousel plus the TikTok / Instagram / YouTube links in src/<N>.md from the .mp4 files actually present in episodes/<N>/clips/. It replaces the carousel, never duplicates it, and does nothing when no clips exist yet. Your video platform URLs come from the Settings tab.",
+    settings: "Settings stores YOUR donation wallet (Lightning address) and YOUR platform URLs (Spotify / Apple / Fountain audio, TikTok / Instagram / YouTube video) in this project. Mine uses them for the wallet + audio block, Sync carousel uses them for the video links. Defaults match the deepDive project; a project with no saved settings shows those defaults, and saving writes .studio/syndication.json (local, not published).",
   };
   function showHelp(topic: string) { help = HELP[topic] ?? ""; }
   function say(short: string, long = "") {
@@ -339,6 +344,15 @@ if __name__ == '__main__':
     const ev = await run("Signing narrative", () => api.signNarrative(projectPath, password, planEpisode, `# Episode ${planEpisode}\n\n${transcript}`));
     if (ev) signedEvent = JSON.stringify(ev, null, 2);
   }
+  let synd: Syndication = { lightning_address: "", spotify_url: "", apple_podcasts_url: "", fountain_url: "", tiktok_url: "", instagram_url: "", youtube_url: "" };
+  async function loadSettings() {
+    const s = await run("Loading settings", () => api.loadSyndication(projectPath));
+    if (s) synd = s;
+  }
+  async function saveSettings() {
+    const out = await run("Saving settings", () => api.saveSyndication(projectPath, synd));
+    if (out) { notice = out; await loadSettings(); }
+  }
 
   onMount(async () => { channels = await api.listChannels().catch(() => []); previewOn = await api.previewRunning().catch(() => false); });
 </script>
@@ -355,6 +369,7 @@ if __name__ == '__main__':
     <button class:active={view === "reels"} onclick={() => (view = "reels")}>Reels</button>
     <button class:active={view === "publish"} onclick={() => (view = "publish")}>Publish</button>
     <button class:active={view === "identity"} onclick={() => (view = "identity")}>Identity &amp; Channels</button>
+    <button class:active={view === "settings"} onclick={() => (view = "settings")}>Settings</button>
     <button title="Toggle how much the app explains" onclick={toggleVerbose}>Messages: {verbose ? "Verbose" : "Quiet"}</button>
   </nav>
 </header>
@@ -571,13 +586,17 @@ if __name__ == '__main__':
           <input bind:value={audioPath} placeholder="C:\Users\you\Downloads\episode-audio.mp3" aria-label="Audio file" />
           <button disabled={busy} onclick={browseAudio}>Browse audio…</button>
         </div>
-        <div class="row">
+        <div class="lens-actions">
           <button class="primary" disabled={busy || !projectPath || !audioPath} title={!projectPath ? "Open a project first" : !audioPath ? "Choose an audio file first" : "Copy the audio into episodes/<N>/audio/"} onclick={doUploadAudio}>Upload audio into episode</button>
-        </div>
-        <div class="row">
+          <button class="ibtn" title="What does Upload audio do?" onclick={() => showHelp("audio")}>i</button>
           <button class="primary" disabled={busy || !projectPath || !uploadedAudioName} title={!uploadedAudioName ? "Upload the audio first" : "Transcribe with sherpa-onnx and save transcription.json + narrative.md"} onclick={doTranscribe}>Transcribe Episode</button>
+          <button class="ibtn" title="What does Transcribe do?" onclick={() => showHelp("transcribe")}>i</button>
+        </div>
+        <div class="lens-actions">
           <button class="accent" disabled={busy || !projectPath} title="Plan clips from the saved transcription.json (real word timing) and save plan.json" onclick={doPlanReal}>Break into clips (real timing)</button>
+          <button class="ibtn" title="What does Break into clips do?" onclick={() => showHelp("clips")}>i</button>
           <button disabled={busy || !projectPath} title="Embed the video carousel + TikTok/Instagram/YouTube links for clips already built" onclick={doSyncCarousel}>Sync video carousel</button>
+          <button class="ibtn" title="What does Sync video carousel do?" onclick={() => showHelp("carousel")}>i</button>
         </div>
         {#if !uploadedAudioName}<p class="small">Transcribe enables after the audio upload. It runs sherpa-onnx on your machine with word-level timestamps; models are found automatically in your ShutriStudio models folder — no binary or model paths to pick. Engine overrides live under Advanced.</p>{/if}
         <details>
@@ -690,6 +709,41 @@ if __name__ == '__main__':
       </section>
     </div>
   {/if}
+
+  {#if view === "settings"}
+    <div class="grid">
+      <section class="panel">
+        <h2>Your wallet &amp; platform links</h2>
+        <p class="small">These are yours, per project — not the deepDive defaults. <strong>Mine</strong> uses the wallet + audio links for the block above Works Cited; <strong>Sync video carousel</strong> uses the video links. A project with no saved settings falls back to the built-in defaults.</p>
+        {#if !projectPath}<p class="small">Open a project first — then load, edit and save its settings.</p>{/if}
+        <div class="lens-actions">
+          <button disabled={busy || !projectPath} title={!projectPath ? "Open a project first" : "Load this project's saved settings (or the defaults)"} onclick={loadSettings}>Load settings</button>
+          <button class="primary" disabled={busy || !projectPath} title={!projectPath ? "Open a project first" : "Save these values to .studio/syndication.json (local, not published)"} onclick={saveSettings}>Save settings</button>
+          <button class="ibtn" title="How do settings work?" onclick={() => showHelp("settings")}>i</button>
+        </div>
+        <label for="set-wallet">Lightning address (donation wallet)</label>
+        <input id="set-wallet" bind:value={synd.lightning_address} placeholder="you@primal.net" autocomplete="off" />
+        <h3>Audio platforms (added at Mine)</h3>
+        <label for="set-spotify">Spotify show URL</label>
+        <input id="set-spotify" bind:value={synd.spotify_url} placeholder="https://open.spotify.com/show/…" autocomplete="off" />
+        <label for="set-apple">Apple Podcasts URL</label>
+        <input id="set-apple" bind:value={synd.apple_podcasts_url} placeholder="https://podcasts.apple.com/…" autocomplete="off" />
+        <label for="set-fountain">Fountain.fm URL</label>
+        <input id="set-fountain" bind:value={synd.fountain_url} placeholder="https://fountain.fm/show/…" autocomplete="off" />
+        <h3>Video platforms (added by Sync video carousel)</h3>
+        <label for="set-tiktok">TikTok profile URL</label>
+        <input id="set-tiktok" bind:value={synd.tiktok_url} placeholder="https://www.tiktok.com/…" autocomplete="off" />
+        <label for="set-instagram">Instagram profile URL</label>
+        <input id="set-instagram" bind:value={synd.instagram_url} placeholder="https://www.instagram.com/…" autocomplete="off" />
+        <label for="set-youtube">YouTube playlist URL</label>
+        <input id="set-youtube" bind:value={synd.youtube_url} placeholder="https://www.youtube.com/playlist?…" autocomplete="off" />
+      </section>
+      <section class="panel">
+        <h2>Where settings live</h2>
+        <p class="small">Saved to <span class="mono">.studio/syndication.json</span> in the open project — local app state, like the Nostr identity, and never published to the book or pushed by Publish stages (only <span class="mono">src/</span>, <span class="mono">episodes/</span> and <span class="mono">book.toml</span> are staged). Old episodes are not rewritten: saving new settings only changes what future Mines and carousel syncs embed.</p>
+      </section>
+    </div>
+  {/if}
 </main>
 <footer class="statusbar" role="status" aria-live="polite">
   {#if busy}
@@ -751,6 +805,9 @@ if __name__ == '__main__':
   .ledger-foot { align-items: center; gap: 6px; margin-top: 8px; }
   .ledger-foot button { height: 32px; min-height: 32px; padding: 0 12px; margin: 0; font-size: 13px; line-height: 1; border-radius: 7px; display: inline-flex; align-items: center; }
   .ledger-foot .ibtn { width: 32px; height: 32px; min-height: 32px; padding: 0; border-radius: 7px; }
+  .lens-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  .lens-actions button { height: 32px; min-height: 32px; padding: 0 12px; margin: 0; font-size: 13px; line-height: 1; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; }
+  .lens-actions .ibtn { width: 32px; height: 32px; min-height: 32px; padding: 0; border-radius: 7px; flex: none; }
   @media (max-width: 640px) {
     .episode { flex-direction: column; align-items: stretch; gap: 10px; }
     .ep-actions { justify-content: flex-start; }

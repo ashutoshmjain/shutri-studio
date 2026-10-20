@@ -52,6 +52,19 @@ export interface Channel {
   kind: string;
   status: string;
 }
+export interface Syndication {
+  lightning_address: string;
+  spotify_url: string;
+  apple_podcasts_url: string;
+  fountain_url: string;
+  tiktok_url: string;
+  instagram_url: string;
+  youtube_url: string;
+}
+const emptySyndication: Syndication = {
+  lightning_address: "", spotify_url: "", apple_podcasts_url: "", fountain_url: "", tiktok_url: "", instagram_url: "", youtube_url: "",
+};
+let demoSyndication: Syndication | null = null;
 export interface GitStatus {
   is_repo: boolean;
   branch: string | null;
@@ -163,6 +176,11 @@ async function demo(cmd: string, a: Record<string, unknown>): Promise<unknown> {
     }
     case "sync_video_carousel":
       return 0;
+    case "load_syndication":
+      return demoSyndication ?? { ...emptySyndication };
+    case "save_syndication":
+      demoSyndication = { ...(a.settings as Syndication) };
+      return "Demo: settings saved in memory only.";
     case "upload_audio":
       return "demo/episodes/1/audio/demo.mp3";
     case "transcribe_episode":
@@ -253,6 +271,9 @@ export const api = {
   lockEpisode: (path: string, episode: number) => call<Episode>("lock_episode", { path, episode }),
   syncVideoCarousel: (path: string, episode: number) =>
     call<number>("sync_video_carousel", { path, episode }),
+  loadSyndication: (path: string) => call<Syndication>("load_syndication", { path }),
+  saveSyndication: (path: string, settings: Syndication) =>
+    call<string>("save_syndication", { path, settings }),
   uploadAudio: (path: string, episode: number, source: string) =>
     call<string>("upload_audio", { path, episode, source }),
   transcribeEpisode: (path: string, episode: number, audioFile: string, engine: string, binary: string, model: string) =>
