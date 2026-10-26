@@ -60,23 +60,38 @@ fn upload_audio(path: String, episode: u32, source: String) -> CmdResult<String>
         .map_err(|e| e.to_string())
 }
 
-/// Transcribe with sherpa-onnx by default (word-level timestamps,
-/// models auto-detected — no paths asked in the UI). `engine =
-/// "whisper"` is the legacy whisper.cpp override from Advanced.
+/// Transcribe — deepDive's time-tested `openai-whisper` is now the default.
+/// `engine` selects the backend: default / "python" → PythonWhisper
+/// (`whisper.load_model("small.en").transcribe(..., word_timestamps=True)` —
+/// identical to deepDive's ingest/server.py); "sherpa" → sherpa-onnx
+/// Zipformer; "whisper" → whisper.cpp CLI. Only the advanced engines need
+/// binary/model paths.
 #[tauri::command]
 fn transcribe_episode(path: String, episode: u32, audio_file: String, engine: Option<String>, binary: Option<String>, model: Option<String>) -> CmdResult<serde_json::Value> {
     use shutri_core::transcribe::Transcriber;
     let audio = bundle::episode_dir(&pb(&path), episode).join("audio").join(&audio_file);
     let binary = binary.unwrap_or_default();
-    let words = if engine.as_deref() == Some("whisper") {
-        let engine = transcribe::WhisperCpp { binary: if binary.trim().is_empty() { "whisper-cli".into() } else { binary } };
-        engine.transcribe(&audio, &pb(&model.unwrap_or_default())).map_err(|e| e.to_string())?
-    } else {
-        let engine = transcribe::SherpaOnnxTranscriber {
-            binary: if binary.trim().is_empty() { None } else { Some(binary) },
-            ..Default::default()
-        };
-        engine.transcribe(&audio, &pb("")).map_err(|e| e.to_string())?
+    let model_name = model.unwrap_or_default();
+    let words = match engine.as_deref() {
+        Some("whisper") => {
+            let e = transcribe::WhisperCpp { binary: if binary.trim().is_empty() { "whisper-cli".into() } else { binary } };
+            e.transcribe(&audio, &pb(&model_name)).map_err(|e| e.to_string())?
+        }
+        Some("sherpa") => {
+            let e = transcribe::SherpaOnnxTranscriber {
+                binary: if binary.trim().is_empty() { None } else { Some(binary) },
+                ..Default::default()
+            };
+            e.transcribe(&audio, &pb("")).map_err(|e| e.to_string())?
+        }
+        _ => {
+            // Default: deepDive's openai-whisper — no sherpa download, no .bin path.
+            let e = transcribe::PythonWhisper {
+                python: if binary.trim().is_empty() { None } else { Some(binary) },
+                model: if model_name.trim().is_empty() { "small.en".into() } else { model_name },
+            };
+            e.transcribe(&audio, &pb("")).map_err(|e| e.to_string())?
+        }
     };
     let n = transcribe::save_transcription(&pb(&path), episode, &words).map_err(|e| e.to_string())?;
     let text = words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");

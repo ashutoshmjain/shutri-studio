@@ -44,6 +44,119 @@ impl Transcriber for WhisperCpp {
     }
 }
 
+/// Parse openai-whisper Python output (deepDive's time-tested pipeline:
+/// `whisper.load_model("small.en").transcribe(path, word_timestamps=True)`).
+/// Shape: `{ "text": "…", "segments": [{ "start":…, "end":…, "text":"…",
+/// "words": [{ "word":" Hello", "start":…, "end":…, "probability":… }] }] }`
+/// `word` may carry a leading space — trimmed only for display, boundary
+/// detection mirrors `aggregate_tokens`.
+pub fn parse_openai_whisper_json(json: &str) -> Result<Vec<Word>> {
+    let v: serde_json::Value = serde_json::from_str(json)?;
+    let segs = v.get("segments").and_then(|s| s.as_array())
+        .ok_or_else(|| crate::CoreError::Msg("no segments in openai-whisper output".into()))?;
+    let mut words = Vec::new();
+    for seg in segs {
+        if let Some(ws) = seg.get("words").and_then(|w| w.as_array()) {
+            for w in ws {
+                let text = w.get("word").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
+                if text.is_empty() || text.starts_with("[_") { continue; }
+                let start = w.get("start").and_then(|x| x.as_f64()).unwrap_or(0.0);
+                let end = w.get("end").and_then(|x| x.as_f64()).unwrap_or(start + 0.4);
+                words.push(Word { text, start, end });
+            }
+        }
+        // Fallback: some whisper builds emit segment text without words — synthesize
+        // word timing only if no words were produced at all (keeps contract loud).
+        if words.is_empty() {
+            if let Some(txt) = seg.get("text").and_then(|t| t.as_str()) {
+                if !txt.trim().is_empty() {
+                    // Return error rather than flat timing — caller decides to re-run.
+                    return crate::msg("openai-whisper output has segments but no word timestamps (words[] missing) — re-run with word_timestamps=True");
+                }
+            }
+        }
+    }
+    if words.is_empty() {
+        return crate::msg("no words in openai-whisper output");
+    }
+    // openai-whisper words are already whole words; still validate monotonicity.
+    check_monotonic(&words)?;
+    Ok(words)
+}
+
+/// Python openai-whisper engine — the deepDive time-tested pipeline.
+/// Runs `python -c "import whisper; whisper.load_model(...).transcribe(...)"`
+/// so the model, fp16=False and word_timestamps=True match deepDive exactly.
+/// No .bin path, no sherpa download. Requires `pip install openai-whisper`.
+pub struct PythonWhisper {
+    pub python: Option<String>,
+    pub model: String,
+}
+
+impl Default for PythonWhisper {
+    fn default() -> Self { Self { python: None, model: "small.en".into() } }
+}
+
+impl PythonWhisper {
+    fn resolve_python(&self) -> Option<PathBuf> {
+        if let Some(p) = &self.python { let pb = PathBuf::from(p); if pb.is_file() { return Some(pb); } }
+        if let Ok(p) = std::env::var("SHUTRI_PYTHON") { let pb = PathBuf::from(p); if pb.is_file() { return Some(pb); } }
+        if let Ok(p) = std::env::var("PYTHON") { let pb = PathBuf::from(p); if pb.is_file() { return Some(pb); } }
+        for name in ["python", "python3", "py"] {
+            if let Some(p) = find_on_path(name) { return Some(p); }
+            if cfg!(windows) {
+                if let Some(p) = find_on_path(&format!("{name}.exe")) { return Some(p); }
+            }
+        }
+        None
+    }
+}
+
+impl Transcriber for PythonWhisper {
+    fn name(&self) -> &str { "openai-whisper" }
+    fn transcribe(&self, audio: &Path, _model: &Path) -> Result<Vec<Word>> {
+        let python = self.resolve_python().ok_or_else(|| crate::CoreError::Msg(
+            "python not found on PATH. Install Python and `pip install openai-whisper`, or set SHUTRI_PYTHON to its full path. (sherpa-onnx remains available under Advanced)".into()
+        ))?;
+        let model_name = if self.model.trim().is_empty() { "small.en" } else { self.model.trim() };
+        // Inline Python that mirrors deepDive/ingest/server.py exactly.
+        // download_root respects SHUTRI_WHISPER_CACHE, XDG_CACHE_HOME, or falls back
+        // to deepDive's writable cache — avoids Read-only /home/amj/.cache in sandbox.
+        let py_code = r#"
+import sys, json, os
+import whisper
+audio = sys.argv[1]
+model_name = sys.argv[2]
+cache = os.environ.get("SHUTRI_WHISPER_CACHE") or os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+download_root = os.path.join(cache, "whisper")
+os.makedirs(download_root, exist_ok=True)
+try:
+    model = whisper.load_model(model_name, download_root=download_root)
+except Exception:
+    model = whisper.load_model("base", download_root=download_root)
+result = model.transcribe(audio, fp16=False, word_timestamps=True, verbose=False)
+json.dump(result, sys.stdout, ensure_ascii=False)
+"#;
+        let out = Command::new(&python)
+            .args(["-c", py_code, &audio.to_string_lossy(), model_name])
+            .output()
+            .map_err(|e| crate::CoreError::Msg(format!("could not run {} ({e}). Install Python and `pip install openai-whisper`.", python.display())))?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let msg = if !stderr.is_empty() { stderr } else if !stdout.is_empty() { stdout } else { format!("exit {}", out.status) };
+            // Common case: whisper not installed in this python.
+            if msg.contains("No module named") && msg.contains("whisper") {
+                return crate::msg(format!("python at {} has no `whisper` module. Run: {} -m pip install openai-whisper  (model {model_name} will download on first use)", python.display(), python.display()));
+            }
+            return crate::msg(format!("openai-whisper failed: {msg}"));
+        }
+        let json = String::from_utf8_lossy(&out.stdout).to_string();
+        // Try openai-whisper shape first, then whisper.cpp shape for compat.
+        parse_openai_whisper_json(&json).or_else(|_| parse_whisper_json(&json)).or_else(|_| parse_sherpa_json(&json))
+    }
+}
+
 /// One raw engine token, before subword fragments are merged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawToken {
@@ -368,6 +481,16 @@ impl Transcriber for SherpaOnnxTranscriber {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_openai_whisper_words_with_leading_space() {
+        let j = r#"{"text":"Hello world","segments":[{"start":0.0,"end":0.9,"text":" Hello world","words":[{"word":" Hello","start":0.0,"end":0.4,"probability":0.99},{"word":" world","start":0.4,"end":0.9,"probability":0.98}]}]}"#;
+        let w = parse_openai_whisper_json(j).unwrap();
+        assert_eq!(w.len(), 2);
+        assert_eq!(w[0].text, "Hello");
+        assert_eq!(w[1].text, "world");
+        assert_eq!((w[0].start, w[0].end), (0.0, 0.4));
+    }
 
     #[test]
     fn parses_words() {

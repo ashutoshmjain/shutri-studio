@@ -84,7 +84,7 @@ if __name__ == '__main__':
     extract: "Extract reads the raw_markdown string out of your LLM's Python payload and writes it as a mempool draft (_slug.md), byte-for-byte, so $...$ equations survive. The title and slug come from the paper's # H1 line.",
     publish: "Publish stages src/, episodes/ and book.toml in your project repo, commits with an automatic message, and pushes to its configured remote. It uses your own Git credentials; the app stores no tokens.",
     audio: "Upload audio into episode COPIES your NotebookLM original (mp3/wav/m4a/flac/ogg) into episodes/<N>/audio/ inside the project — it is not pasted into the research article and never goes through the chat. The file can be well over 100 MB; it lives in your project repo and ships with it when you Publish, so keep the original somewhere safe and treat the episode bundle as the heavy part of the project.",
-    transcribe: "Transcribe Episode runs sherpa-onnx on the uploaded audio and writes episodes/<N>/transcription.json (every word timed) plus narrative.md. It fails loudly if the models are missing or the engine was found but returned no word timestamps — a transcription with flat zero timing must never become a clip plan. whisper.cpp stays available only under Advanced / Developer.",
+    transcribe: "Transcribe Episode runs openai-whisper (deepDive's time-tested small.en, word_timestamps=True) on the uploaded audio and writes episodes/<N>/transcription.json (every word timed) plus narrative.md. Requires `pip install openai-whisper` in the Python on PATH (or set SHUTRI_PYTHON). sherpa-onnx and whisper.cpp remain available under Advanced / Developer as overrides — they need their own models/binaries. The engine fails loudly if no word timestamps are returned — flat zero timing must never become a clip plan.",
     clips: "Break into clips (real timing) groups the transcript's sentences into ~target-second clips, snapping boundaries to sentence ends using the saved word timestamps, and writes plan.json. If you only get 1 clip covering the whole episode, the transcription behind it has no usable timing — re-transcribe and check that transcription.json words carry distinct start/end times. Then retitle clips, nudge speech start/end seconds, add music segments with crossfades, remove what drags, and Save plan.json.",
     carousel: "Sync video carousel rebuilds the VIDEO_STRIP carousel plus the TikTok / Instagram / YouTube links in src/<N>.md from the .mp4 files actually present in episodes/<N>/clips/. It replaces the carousel, never duplicates it, and does nothing when no clips exist yet. Your video platform URLs come from the Settings tab.",
     settings: "Settings stores YOUR donation wallet (Lightning address) and YOUR platform URLs (Spotify / Apple / Fountain audio, TikTok / Instagram / YouTube video) in this project. Mine uses them for the wallet + audio block, Sync carousel uses them for the video links. Defaults match the deepDive project; a project with no saved settings shows those defaults, and saving writes .studio/syndication.json (local, not published).",
@@ -259,11 +259,12 @@ if __name__ == '__main__':
   }
   let audioPath = "";
   let uploadedAudioName = "";
-  // sherpa-onnx is the default engine; whisper.cpp survives only as
-  // an Advanced override. No binary/model paths in the main flow.
-  let transcribeEngine = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-transcribe-engine") ?? "sherpa") : "sherpa";
+  // Default is now deepDive's time-tested openai-whisper (PythonWhisper
+  // small.en, word_timestamps=True). sherpa-onnx and whisper.cpp are
+  // Advanced overrides only.
+  let transcribeEngine = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-transcribe-engine") ?? "python") : "python";
   let engineBinary = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-engine-bin") ?? "") : "";
-  let whisperModel = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-whisper-model") ?? "") : "";
+  let whisperModel = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-whisper-model") ?? "small.en") : "small.en";
   async function browseAudio() {
     error = ""; notice = "";
     try {
@@ -576,7 +577,7 @@ if __name__ == '__main__':
     <div class="grid">
       <section class="panel">
         <h2>Episode audio → transcription</h2>
-        <p class="small">Upload the <strong>original NotebookLM audio</strong> for a mined episode (your Audacity podcast edit stays outside Studio). Transcription (sherpa-onnx, word-level) turns it into word timing — the basis of the Narrative and of every clip boundary.</p>
+        <p class="small">Upload the <strong>original NotebookLM audio</strong> for a mined episode (your Audacity podcast edit stays outside Studio). Transcription (openai-whisper small.en, word-level — same as deepDive) turns it into word timing — the basis of the Narrative and of every clip boundary.</p>
         <div class="row">
           <div><label for="pe">Episode number</label><input id="pe" type="number" min="1" bind:value={planEpisode} /></div>
           <div><label for="tg">Target seconds per clip (under 180 for Shorts)</label><input id="tg" type="number" min="10" max="180" bind:value={targetSecs} /></div>
@@ -589,7 +590,7 @@ if __name__ == '__main__':
         <div class="lens-actions">
           <button class="primary" disabled={busy || !projectPath || !audioPath} title={!projectPath ? "Open a project first" : !audioPath ? "Choose an audio file first" : "Copy the audio into episodes/<N>/audio/"} onclick={doUploadAudio}>Upload audio into episode</button>
           <button class="ibtn" title="What does Upload audio do?" onclick={() => showHelp("audio")}>i</button>
-          <button class="primary" disabled={busy || !projectPath || !uploadedAudioName} title={!uploadedAudioName ? "Upload the audio first" : "Transcribe with sherpa-onnx and save transcription.json + narrative.md"} onclick={doTranscribe}>Transcribe Episode</button>
+          <button class="primary" disabled={busy || !projectPath || !uploadedAudioName} title={!uploadedAudioName ? "Upload the audio first" : "Transcribe with openai-whisper (small.en) and save transcription.json + narrative.md"} onclick={doTranscribe}>Transcribe Episode</button>
           <button class="ibtn" title="What does Transcribe do?" onclick={() => showHelp("transcribe")}>i</button>
         </div>
         <div class="lens-actions">
@@ -598,16 +599,25 @@ if __name__ == '__main__':
           <button disabled={busy || !projectPath} title="Embed the video carousel + TikTok/Instagram/YouTube links for clips already built" onclick={doSyncCarousel}>Sync video carousel</button>
           <button class="ibtn" title="What does Sync video carousel do?" onclick={() => showHelp("carousel")}>i</button>
         </div>
-        {#if !uploadedAudioName}<p class="small">Transcribe enables after the audio upload. It runs sherpa-onnx on your machine with word-level timestamps; models are found automatically in your ShutriStudio models folder — no binary or model paths to pick. Engine overrides live under Advanced.</p>{/if}
+        {#if !uploadedAudioName}<p class="small">Transcribe enables after the audio upload. Default is openai-whisper (deepDive's time-tested <span class="mono">small.en</span>) — just needs <span class="mono">pip install openai-whisper</span> in the Python on PATH. Alternatives live under Advanced.</p>{/if}
         <details>
           <summary class="small">Advanced / Developer — transcription engine override</summary>
           <label for="engine">Engine</label>
           <select id="engine" bind:value={transcribeEngine}>
-            <option value="sherpa">sherpa-onnx (default, word-level)</option>
-            <option value="whisper">whisper.cpp (legacy)</option>
+            <option value="python">openai-whisper (default, deepDive parity)</option>
+            <option value="sherpa">sherpa-onnx (Zipformer, needs models)</option>
+            <option value="whisper">whisper.cpp (legacy, needs .bin)</option>
           </select>
-          <label for="wb">Engine program (optional override)</label>
-          <input id="wb" bind:value={engineBinary} placeholder={transcribeEngine === "whisper" ? "whisper-cli" : "sherpa-onnx-offline"} />
+          {#if transcribeEngine === "python"}
+            <label for="wb">Python override (optional, else PATH)</label>
+            <input id="wb" bind:value={engineBinary} placeholder="python / python3" />
+            <label for="wm">Whisper model</label>
+            <input id="wm" bind:value={whisperModel} placeholder="small.en" />
+            <p class="small">Leave Python empty to use the first <span class="mono">python</span> on PATH. Set <span class="mono">SHUTRI_PYTHON</span> env to pin it. Model downloads on first use (~1 GB for small.en).</p>
+          {:else}
+            <label for="wb">Engine program (optional override)</label>
+            <input id="wb" bind:value={engineBinary} placeholder={transcribeEngine === "whisper" ? "whisper-cli" : "sherpa-onnx-offline"} />
+          {/if}
           {#if transcribeEngine === "whisper"}
             <label>Whisper model file (.bin)</label>
             <div class="pathrow">

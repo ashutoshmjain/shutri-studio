@@ -64,10 +64,12 @@ The episode number is the master key across article, bundle and posts.
 
 Ledger **Edit** opens the article in your chosen editor (gVim by
 default, then VS Code, nvim, vim, Notepad — the deepDive cockpit's
-fallback chain). Transcription defaults to sherpa-onnx with
-word-level timestamps and auto-detected models
-(`%LOCALAPPDATA%\ShutriStudio\models` on Windows); whisper.cpp
-remains only as an Advanced override.
+fallback chain). Transcription defaults to **openai-whisper** `small.en`
+(`pip install openai-whisper`, `SHUTRI_PYTHON` to pin the interpreter —
+identical to deepDive's `whisper.load_model("small.en").transcribe(...,
+word_timestamps=True)`); sherpa-onnx (Zipformer in
+`%LOCALAPPDATA%\ShutriStudio\models`) and whisper.cpp remain as
+Advanced overrides.
 
 ## Run
 
