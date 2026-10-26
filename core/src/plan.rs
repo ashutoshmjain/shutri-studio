@@ -220,6 +220,23 @@ pub fn insert_music(clip: &mut Clip, music_file: String, duration: f64, crossfad
     );
 }
 
+#[test]
+fn plan_from_transcript_issue10_regression() {
+    // Issue 10: lower "Break into Clips" must handle large transcripts
+    // (8836 words) without missing-key error; both buttons now send
+    // target_secs consistently. Verify the plan engine splits correctly.
+    let sentence = "This is a test sentence with eight words. ";
+    let text = sentence.repeat(1104); // ~8832 words, 1104 sentences
+    let words: Vec<Word> = text
+        .split_whitespace()
+        .enumerate()
+        .map(|(i, t)| Word { text: t.into(), start: i as f64 * 0.4, end: i as f64 * 0.4 + 0.36 })
+        .collect();
+    let plan = plan_from_words(&words, 20.0);
+    assert!(plan.len() >= 10, "8832 words at 20s should yield many clips, got {}", plan.len());
+    for c in &plan { assert!(c.duration() > 0.0); }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

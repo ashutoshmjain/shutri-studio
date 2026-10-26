@@ -279,7 +279,7 @@ export const api = {
   transcribeEpisode: (path: string, episode: number, audioFile: string, engine: string, binary: string, model: string) =>
     call<{ words: number; text: string }>("transcribe_episode", { path, episode, audioFile, engine, binary, model }),
   planFromEpisode: (path: string, episode: number, targetSecs: number) =>
-    call<Clip[]>("plan_from_episode", { path, episode, targetSecs }),
+    call<Clip[]>("plan_from_episode", { path, episode, target_secs: targetSecs }),
   promoteEpisode: (path: string, slug: string) => call<Episode>("promote_episode", { path, slug }),
   buildBook: (path: string) => call<string>("build_book", { path }),
   startPreview: (path: string) => call<string>("start_preview", { path }),
