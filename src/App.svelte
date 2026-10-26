@@ -39,7 +39,7 @@ if __name__ == '__main__':
     }
   }
 
-  let projectPath = "";
+  let projectPath = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-last-project-path") ?? "") : "";
   let projectName = "MyResearch";
   let project: ProjectInfo | null = null;
   let episodes: Episode[] = [];
@@ -145,6 +145,7 @@ if __name__ == '__main__':
       const picked = await pickFolder();
       if (picked) {
         projectPath = picked;
+        try { localStorage.setItem("studio-last-project-path", picked); } catch {}
         const base = picked.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
         if (base && (projectName === "MyResearch" || !projectName)) projectName = base;
         notice = `Folder chosen: ${picked}. Now click "Create new project" (or "Reopen existing" if it is already a Studio project).`;
@@ -199,10 +200,12 @@ if __name__ == '__main__':
     if (ep) { mdPath = ""; await refresh(); say(`Uploaded "${ep.title}" into the mempool as _${ep.slug}.md.`, "The file was copied into src/ and listed in SUMMARY.md — the original stays where it was. Read it in the Ledger; edit it there with the Edit button (opens it in your chosen editor — gVim by default) at any time."); }
   }
   async function openProject() {
+    try { localStorage.setItem("studio-last-project-path", projectPath); } catch {}
     const p = await run("Opening project", () => api.inspectProject(projectPath));
     if (p) { project = p; await refresh(); }
   }
   async function createProject() {
+    try { localStorage.setItem("studio-last-project-path", projectPath); } catch {}
     const p = await run("Creating fresh project (folders, SUMMARY.md, git init)", () => api.createProject(projectPath, projectName));
     if (p) { project = p; await refresh(); say("Fresh project created and initialised as a Git repo.", "What you have now: book.toml (the book settings), src/SUMMARY.md listing cover · mempool · template · chain, a _welcome mempool draft to experiment with, and an episodes/ folder for audio, plans and clips. Nothing exists online yet. Next step: open the Article tab and extract your first Python payload."); }
   }
@@ -262,7 +265,7 @@ if __name__ == '__main__':
   // Default is now deepDive's time-tested openai-whisper (PythonWhisper
   // small.en, word_timestamps=True). sherpa-onnx and whisper.cpp are
   // Advanced overrides only.
-  let transcribeEngine = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-transcribe-engine") ?? "python") : "python";
+  let transcribeEngine = typeof localStorage !== "undefined" ? (() => { const v = localStorage.getItem("studio-transcribe-engine"); return v === "sherpa" ? "python" : (v ?? "python"); })() : "python";
   let engineBinary = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-engine-bin") ?? "") : "";
   let whisperModel = typeof localStorage !== "undefined" ? (localStorage.getItem("studio-whisper-model") ?? "small.en") : "small.en";
   async function browseAudio() {
@@ -308,8 +311,8 @@ if __name__ == '__main__':
     if (p) { plan = p; say(`${p.length} clips planned for episode ${planEpisode} and saved to plan.json.`, "Boundaries snapped to sentence ends using the real word timestamps — not estimates. Now the creative edit: retitle clips, nudge speech start/end seconds, add music segments with crossfades, remove what drags. Save plan.json after editing."); }
   }
   async function makePlan() {
-    const p = await run("Breaking transcript into clips", () => api.planFromTranscript(transcript, targetSecs));
-    if (p) plan = p;
+    const p = await run("Breaking transcript into clips (estimated timing)", () => api.planFromTranscript(transcript, targetSecs));
+    if (p) { plan = p; say(`${p.length} clips planned (estimated timing) and shown below.`, "This is a dry-run estimate (~2.5 words/sec) without real audio timing. For accurate boundaries, use Break into clips (real timing) after Transcribe Episode. Now edit, then Save plan.json."); }
   }
   async function savePlan() {
     const out = await run("Saving plan.json", () => api.savePlan(projectPath, planEpisode, plan));
@@ -777,7 +780,7 @@ if __name__ == '__main__':
 
 
 <style>
-  .topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 22px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .topbar { position: sticky; top: 0; z-index: 20; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 22px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
   .brand { font-family: Georgia, serif; font-size: 22px; font-weight: 700; }
   .tagline { font-size: 12px; color: var(--muted); }
   nav { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -852,7 +855,7 @@ if __name__ == '__main__':
   .project-strip { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 14px; }
   .reader { margin-top: 16px; }
   .reader-top { margin-top: 0; margin-bottom: 16px; }
-  .reader-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 6px; }
+  .reader-head { position: sticky; top: 0; z-index: 10; display: flex; justify-content: space-between; gap: 12px; align-items: start; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 6px; background: var(--panel); }
   .reader-hint { margin-top: 12px; }
   .article-body { line-height: 1.65; font-size: 15px; overflow-wrap: break-word; }
   .article-body h1, .article-body h2, .article-body h3 { line-height: 1.25; }
